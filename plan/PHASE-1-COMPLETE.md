@@ -288,6 +288,13 @@ npm run preview
 
 ## 🔧 Known Issues & Notes
 
+### ✅ Fixed Issues
+1. **Dexie IndexedDB Error** - RESOLVED
+   - Error: `Cannot read properties of undefined (reading 'subscribe')`
+   - Cause: Deprecated `.on()` event handlers
+   - Fix: Replaced with `db.open().catch()` pattern
+   - Status: ✅ Working correctly
+
 ### Minor Warnings (Non-Blocking)
 1. **Peer dependency warnings** from pdfme's form-render
    - Uses React 16 internally
@@ -296,6 +303,9 @@ npm run preview
 2. **npm vulnerabilities** (14 total)
    - Mostly in dev dependencies
    - Will address in Phase 10 (Polish)
+
+### Troubleshooting
+See [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) for common issues and solutions
 
 ### Browser Requirements
 - ✅ Chrome 113+ (WebGPU support)

@@ -114,15 +114,9 @@ class PiwiDatabase extends Dexie {
 // Create single instance
 const db = new PiwiDatabase();
 
-// Error handling
-db.on('error', (error) => {
-  console.error('IndexedDB Error:', error);
-});
-
-// Version change handling
-db.on('versionchange', () => {
-  console.warn('Database version changed. Please reload the page.');
-  db.close();
+// Open the database and handle errors
+db.open().catch((error) => {
+  console.error('Failed to open IndexedDB:', error);
 });
 
 export default db;
