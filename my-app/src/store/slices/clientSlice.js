@@ -1,39 +1,25 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { v4 as uuidv4 } from 'uuid';
-import db from '../../services/storage/indexedDB.service';
+import clientStorageService from '../../services/storage/clientStorage.service';
 
 // Async thunks for IndexedDB operations
 export const fetchClients = createAsyncThunk(
   'clients/fetchAll',
   async () => {
-    const clients = await db.clients.toArray();
-    return clients;
+    return await clientStorageService.getAllClients();
   }
 );
 
 export const createClient = createAsyncThunk(
   'clients/create',
   async (clientData) => {
-    const client = {
-      id: uuidv4(),
-      ...clientData,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      metadata: clientData.metadata || {}
-    };
-    await db.clients.add(client);
-    return client;
+    return await clientStorageService.createClient(clientData);
   }
 );
 
 export const updateClient = createAsyncThunk(
   'clients/update',
   async ({ id, updates }) => {
-    const updatedData = {
-      ...updates,
-      updatedAt: Date.now()
-    };
-    await db.clients.update(id, updatedData);
+    const updatedData = await clientStorageService.updateClient(id, updates);
     return { id, updates: updatedData };
   }
 );
@@ -41,13 +27,7 @@ export const updateClient = createAsyncThunk(
 export const deleteClient = createAsyncThunk(
   'clients/delete',
   async (id) => {
-    // Also delete associated documents
-    const documents = await db.documents.where('clientId').equals(id).toArray();
-    const documentIds = documents.map(doc => doc.id);
-    await db.documents.bulkDelete(documentIds);
-
-    // Delete client
-    await db.clients.delete(id);
+    await clientStorageService.deleteClient(id);
     return id;
   }
 );

@@ -1,34 +1,55 @@
-import React from 'react';
-import { useSelector } from 'react-redux';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import db from '../services/storage/indexedDB.service';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Users, FileText, FileStack, Upload, Plus, Settings, FilePlus } from 'lucide-react';
+import GlobalUploadDialog from '../components/document/GlobalUploadDialog';
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const clients = useSelector((state) => state.clients.items);
-  const documents = useSelector((state) => state.documents.items);
-  const templates = useSelector((state) => state.templates.items);
+  const [statsData, setStatsData] = useState({
+    clients: 0,
+    documents: 0,
+    templates: 0
+  });
+  const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
+
+  useEffect(() => {
+    const loadStats = async () => {
+      try {
+        const stats = await db.getStats();
+        setStatsData({
+          clients: stats.clients || 0,
+          documents: stats.documents || 0,
+          templates: stats.templates || 0
+        });
+      } catch (error) {
+        console.error("Failed to load dashboard stats:", error);
+      }
+    };
+
+    loadStats();
+  }, []);
 
   const stats = [
     {
       title: 'Total Clients',
-      value: clients.length,
+      value: statsData.clients,
       icon: Users,
       color: 'text-blue-600',
       bgColor: 'bg-blue-100',
     },
     {
       title: 'Documents',
-      value: documents.length,
+      value: statsData.documents,
       icon: FileText,
       color: 'text-green-600',
       bgColor: 'bg-green-100',
     },
     {
       title: 'Templates',
-      value: templates.length,
+      value: statsData.templates,
       icon: FileStack,
       color: 'text-purple-600',
       bgColor: 'bg-purple-100',
@@ -47,14 +68,14 @@ const Dashboard = () => {
       title: 'Upload Documents',
       description: 'Upload files for extraction',
       icon: Upload,
-      onClick: () => navigate('/clients'),
+      onClick: () => setIsUploadDialogOpen(true),
       color: 'border-green-200 hover:border-green-500 hover:bg-green-50',
     },
     {
       title: 'Create Template',
       description: 'Design a new PDF template',
       icon: FilePlus,
-      onClick: () => navigate('/clients'),
+      onClick: () => navigate('/settings'), // Temporary redirect until templates implemented
       color: 'border-purple-200 hover:border-purple-500 hover:bg-purple-50',
     },
     {
@@ -126,7 +147,7 @@ const Dashboard = () => {
       </Card>
 
       {/* Getting Started */}
-      {clients.length === 0 && (
+      {statsData.clients === 0 && (
         <Card className="border-blue-200 bg-blue-50">
           <CardHeader>
             <CardTitle className="text-blue-900">Getting Started</CardTitle>
@@ -146,6 +167,12 @@ const Dashboard = () => {
           </CardContent>
         </Card>
       )}
+
+      {/* Global Upload Dialog */}
+      <GlobalUploadDialog
+        isOpen={isUploadDialogOpen}
+        onClose={() => setIsUploadDialogOpen(false)}
+      />
     </div>
   );
 };

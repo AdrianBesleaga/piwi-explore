@@ -13,6 +13,7 @@ import MainLayout from './components/layout/MainLayout';
 // Pages
 import Dashboard from './pages/Dashboard';
 import ClientList from './pages/ClientList';
+import ClientDetail from './pages/ClientDetail';
 import Settings from './pages/Settings';
 import UnsupportedBrowser from './pages/UnsupportedBrowser';
 
@@ -70,6 +71,7 @@ function App() {
             <Route path="/" element={<MainLayout />}>
               <Route index element={<Dashboard />} />
               <Route path="clients" element={<ClientList />} />
+              <Route path="clients/:id" element={<ClientDetail />} />
               <Route path="settings" element={<Settings />} />
               {/* Add more routes as needed */}
             </Route>

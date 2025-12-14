@@ -36,9 +36,9 @@ export const store = configureStore({
     getDefaultMiddleware({
       serializableCheck: {
         // Ignore these action types for serialization check
-        ignoredActions: ['persist/PERSIST', 'persist/REHYDRATE'],
+        ignoredActions: ['persist/PERSIST', 'persist/REHYDRATE', 'documents/create/pending', 'documents/create/fulfilled'],
         // Ignore these field paths in all actions
-        ignoredActionPaths: ['payload.fileBlob', 'payload.pdfBlob'],
+        ignoredActionPaths: ['payload.file', 'payload.fileBlob', 'payload.pdfBlob', 'meta.arg.file'],
         // Ignore these paths in the state
         ignoredPaths: ['documents.items', 'templates.items'],
       },

@@ -1,55 +1,34 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { v4 as uuidv4 } from 'uuid';
-import db from '../../services/storage/indexedDB.service';
+import documentStorageService from '../../services/storage/documentStorage.service';
+import { detectFileType } from '../../utils/fileHelpers';
 
 // Async thunks
 export const fetchDocumentsByClient = createAsyncThunk(
   'documents/fetchByClient',
   async (clientId) => {
-    const documents = await db.documents
-      .where('clientId')
-      .equals(clientId)
-      .toArray();
-    return documents;
+    return await documentStorageService.getDocumentsByClientId(clientId);
   }
 );
 
 export const createDocument = createAsyncThunk(
   'documents/create',
   async ({ clientId, file }) => {
-    const document = {
-      id: uuidv4(),
-      clientId,
-      fileName: file.name,
-      fileType: file.type.startsWith('image/') ? 'image' : file.type === 'application/pdf' ? 'pdf' : 'text',
-      fileSize: file.size,
-      fileBlob: file,
-      uploadedAt: Date.now(),
-      status: 'pending',
-      documentType: null,
-      extractedText: null,
-      extractedData: null,
-      jsonSchema: null,
-      processingError: null,
-      metadata: {}
-    };
-    await db.documents.add(document);
-    return document;
+    const type = detectFileType(file) || 'other';
+    return await documentStorageService.createDocument(clientId, file, type);
   }
 );
 
 export const updateDocument = createAsyncThunk(
   'documents/update',
   async ({ id, updates }) => {
-    await db.documents.update(id, updates);
-    return { id, updates };
+    return await documentStorageService.updateDocument(id, updates);
   }
 );
 
 export const deleteDocument = createAsyncThunk(
   'documents/delete',
   async (id) => {
-    await db.documents.delete(id);
+    await documentStorageService.deleteDocument(id);
     return id;
   }
 );
