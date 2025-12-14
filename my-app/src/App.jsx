@@ -15,6 +15,7 @@ import Dashboard from './pages/Dashboard';
 import ClientList from './pages/ClientList';
 import ClientDetail from './pages/ClientDetail';
 import Settings from './pages/Settings';
+import AIPlayground from './pages/AIPlayground';
 import UnsupportedBrowser from './pages/UnsupportedBrowser';
 
 // Loading component
@@ -73,6 +74,8 @@ function App() {
               <Route path="clients" element={<ClientList />} />
               <Route path="clients/:id" element={<ClientDetail />} />
               <Route path="settings" element={<Settings />} />
+              <Route path="settings" element={<Settings />} />
+              <Route path="ai" element={<AIPlayground />} />
               {/* Add more routes as needed */}
             </Route>
 

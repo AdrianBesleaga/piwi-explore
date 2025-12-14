@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { Separator } from '../ui/separator';
 import { Badge } from '../ui/badge';
-import { Home, Users, FileStack, Settings, Database } from 'lucide-react';
+import { Home, Users, FileStack, Settings, Database, Bot } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 const Sidebar = ({ isOpen }) => {
@@ -13,6 +13,7 @@ const Sidebar = ({ isOpen }) => {
     { name: 'Dashboard', path: '/', icon: Home },
     { name: 'Clients', path: '/clients', icon: Users },
     { name: 'Templates', path: '/templates', icon: FileStack },
+    { name: 'AI Playground', path: '/ai', icon: Bot },
     { name: 'Settings', path: '/settings', icon: Settings }
   ];
 

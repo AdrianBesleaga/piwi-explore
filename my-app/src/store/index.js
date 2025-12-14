@@ -9,6 +9,7 @@ import documentReducer from './slices/documentSlice';
 import modelReducer from './slices/modelSlice';
 import templateReducer from './slices/templateSlice';
 import uiReducer from './slices/uiSlice';
+import aiReducer from './slices/aiSlice';
 
 // Combine reducers
 const rootReducer = combineReducers({
@@ -16,7 +17,9 @@ const rootReducer = combineReducers({
   documents: documentReducer,
   models: modelReducer,
   templates: templateReducer,
-  ui: uiReducer
+  templates: templateReducer,
+  ui: uiReducer,
+  ai: aiReducer
 });
 
 // Redux persist configuration
