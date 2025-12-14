@@ -8,6 +8,7 @@ import { Separator } from '../components/ui/separator';
 import ClientForm from '../components/client/ClientForm';
 import DocumentUploader from '../components/document/DocumentUploader';
 import DocumentList from '../components/document/DocumentList';
+import { ProcessingQueue } from '../components/document/ProcessingQueue';
 import { ArrowLeft, Trash2, Edit, FileText } from 'lucide-react';
 
 const ClientDetail = () => {
@@ -118,6 +119,8 @@ const ClientDetail = () => {
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-6">
+                            <ProcessingQueue />
+
                             <DocumentUploader
                                 clientId={client.id}
                                 onUploadComplete={() => dispatch(fetchClients())} // Optional refresh if counts depend on docs

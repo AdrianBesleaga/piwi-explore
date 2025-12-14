@@ -13,6 +13,11 @@ export default defineConfig({
   build: {
     target: 'esnext', // For WebGPU support
   },
+  resolve: {
+    alias: {
+      '@': '/src',
+    },
+  },
   server: {
     port: 3000,
     open: true,

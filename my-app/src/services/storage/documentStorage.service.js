@@ -89,6 +89,44 @@ class DocumentStorageService {
         await db.documents.update(id, updates);
         return { id, ...updates };
     }
+
+    /**
+     * Create a new processing job
+     * @param {string} documentId
+     * @returns {Promise<Object>} Job metadata
+     */
+    async createProcessingJob(documentId) {
+        const job = {
+            id: uuidv4(),
+            documentId,
+            status: 'pending',
+            progress: 0,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        };
+        await db.processing_jobs.add(job);
+        return job;
+    }
+
+    /**
+     * Update a processing job
+     * @param {string} documentId
+     * @param {Object} updates
+     */
+    async updateProcessingJob(documentId, updates) {
+        // Find job by documentId (assuming one active job per doc for simplicity, or find latest)
+        const job = await db.processing_jobs
+            .where('documentId')
+            .equals(documentId)
+            .reverse() // Get latest
+            .first();
+
+        if (job) {
+            await db.processing_jobs.update(job.id, { ...updates, updatedAt: Date.now() });
+            return { id: job.id, ...updates };
+        }
+        return null;
+    }
 }
 
 export const documentStorageService = new DocumentStorageService();
