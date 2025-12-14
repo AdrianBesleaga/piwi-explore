@@ -2,7 +2,7 @@ import Dexie from 'dexie';
 
 // Database name and version
 const DB_NAME = 'piwi_document_extraction';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Keeping version 2 but removing table to avoid migration issues if DB was opened, or I can just reset.
 
 class PiwiDatabase extends Dexie {
   constructor() {

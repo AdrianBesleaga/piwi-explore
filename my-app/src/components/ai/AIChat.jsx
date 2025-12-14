@@ -3,104 +3,217 @@ import { useSelector, useDispatch } from 'react-redux';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Badge } from '@/components/ui/badge';
 import { generateResponse, clearStreamingResponse } from '@/store/slices/aiSlice';
-import { Send, Bot, User } from 'lucide-react';
+import { Send, Bot, FileText, ImageIcon, Loader2, Trash2 } from 'lucide-react';
+import { documentStorageService } from '@/services/storage/documentStorage.service';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Initialize PDF.js worker
+// We need to point to the worker file. In Vite, we can import it as a URL.
+// Ensure pdfjs-dist/build/pdf.worker.min.mjs is available.
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export function AIChat() {
     const dispatch = useDispatch();
-    const { activeModel, modelStatus, streamingResponse, error } = useSelector(state => state.ai);
-    const [input, setInput] = useState('');
-    const [history, setHistory] = useState([]); // Local history for now
-    const scrollRef = useRef(null);
+    const { activeModel, modelStatus, streamingResponse } = useSelector(state => state.ai);
+    const documents = useSelector(state => state.documents.items);
 
+    const [input, setInput] = useState('');
+    const [history, setHistory] = useState([]);
+    const [generating, setGenerating] = useState(false);
+    const [selectedDocId, setSelectedDocId] = useState('none');
+    const [imageData, setImageData] = useState(null); // Base64 of attached image (or rendered PDF page)
+    const [isLoadingImage, setIsLoadingImage] = useState(false);
+
+    const scrollRef = useRef(null);
+    const selectedDoc = documents.find(d => d.id === selectedDocId);
+
+    const isVisionModel = activeModel?.includes('Vision') || activeModel?.includes('Llava');
+
+    // Handle Document Selection & Image Conversion
     useEffect(() => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollIntoView({ behavior: 'smooth' });
-        }
+        const loadAttachment = async () => {
+            if (!selectedDoc || selectedDocId === 'none') {
+                setImageData(null);
+                setHistory([]);
+                return;
+            }
+
+            // Only load image data if we have a Vision Model active
+            if (isVisionModel) {
+                try {
+                    setIsLoadingImage(true);
+                    const doc = await documentStorageService.getDocumentById(selectedDocId);
+                    if (!doc || !doc.fileBlob) return;
+
+                    let dataUrl = null;
+
+                    if (doc.fileType === 'pdf') {
+                        // Render first page of PDF using direct PDF.js
+                        const arrayBuffer = await doc.fileBlob.arrayBuffer();
+                        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                        const page = await pdf.getPage(1);
+
+                        const canvas = document.createElement('canvas');
+                        const context = canvas.getContext('2d');
+                        const viewport = page.getViewport({ scale: 1.5 });
+                        canvas.height = viewport.height;
+                        canvas.width = viewport.width;
+
+                        await page.render({ canvasContext: context, viewport: viewport }).promise;
+                        dataUrl = canvas.toDataURL('image/jpeg');
+
+                    } else if (doc.fileType === 'image') {
+                        // Convert Blob to DataURL
+                        dataUrl = await new Promise((resolve) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => resolve(reader.result);
+                            reader.readAsDataURL(doc.fileBlob);
+                        });
+                    }
+
+                    setImageData(dataUrl);
+
+                    // Add system message about the image
+                    setHistory([{
+                        role: 'system',
+                        content: `User has attached an image of the document "${doc.fileName}". Analyze this image.`
+                    }]);
+
+                } catch (e) {
+                    console.error("Failed to load image attachment", e);
+                } finally {
+                    setIsLoadingImage(false);
+                }
+            } else {
+                // Text Mode
+                setImageData(null);
+                const contextText = selectedDoc.extractedText?.slice(0, 6000) || '';
+                setHistory([{
+                    role: 'system',
+                    content: `You are a helpful AI assistant.
+CONTEXT DOCUMENT (${selectedDoc.fileName}):
+${contextText}
+
+Answer questions based on the context above.`
+                }]);
+            }
+        };
+
+        loadAttachment();
+    }, [selectedDocId, activeModel]);
+
+    // Auto-scroll logic
+    useEffect(() => {
+        scrollRef.current?.scrollIntoView({ block: 'end' });
     }, [history, streamingResponse]);
 
-    const handleSend = async () => {
-        if (!input.trim() || !activeModel || modelStatus !== 'ready') return;
-
-        const userMsg = { role: 'user', content: input };
-        setHistory(prev => [...prev, userMsg]);
-        setInput('');
-
-        // Dispatch generation
-        // We pass the full history to the thunk? 
-        // For simple testing, we just pass the last message or construct it here.
-        // Let's assume the service/thunk handles state or we pass minimal context.
-        // WebLLM needs full history array usually.
-        const messages = [...history, userMsg];
-
-        try {
-            await dispatch(generateResponse(messages)).unwrap();
-            // After generation is done, we technically should move streamingResponse to history
-            // But we can do it via the useEffect monitoring streamingResponse?
-            // Actually, best to do it after promise resolves.
-        } catch (err) {
-            console.error(err);
-        }
-    };
-
-    // Move streaming response to history when done? 
-    // Or just render it separately?
-    // Let's render active streaming response below history.
-    // When generation finishes (we can track loading state of thunk, or add a 'generating' flag), push to history.
-    // Simplification: We pushed to history in handleSend (user part). 
-    // We only need to "finalize" the assistant response when generation is complete.
-    // But we don't know exactly when it completes here easily without local state tracking validation.
-    // We'll trust the user triggers next message or we add a "Stop" button later.
-    // Actually, let's use a local 'generating' state + thunk promise.
-
-    const [generating, setGenerating] = useState(false);
-
-    const onSend = async () => {
-        if (!input.trim()) return;
-        setGenerating(true);
-        const userText = input;
-        setInput('');
-
-        const newHistory = [...history, { role: 'user', content: userText }];
-        setHistory(newHistory);
-
-        await dispatch(generateResponse(newHistory));
-
-        setGenerating(false);
-        // Move result to history
-        // Access latest state? Or just append what we have.
-        // We can't easily access store state here inside closure without useSelector ref.
-        // But we know streamingResponse holds it.
-        // However, React updates might be async. 
-        // Correct approach: The 'streamingResponse' is in Redux. 
-        // We should add it to 'history' state only when we are sure it's done. 
-        // We can copy it from the 'streamingResponse' prop we receive.
-    };
-
-    // Better approach:
-    // Render [...history, { role: 'assistant', content: streamingResponse }] if generating.
-
-    // Effect to finalize message
+    // Effect to finalize message when streaming ends
     useEffect(() => {
         if (!generating && streamingResponse) {
             setHistory(prev => [...prev, { role: 'assistant', content: streamingResponse }]);
             dispatch(clearStreamingResponse());
         }
-    }, [generating]); // runs when generating goes false
+    }, [generating]);
+
+    const handleSend = async () => {
+        if (!input.trim() || !activeModel || modelStatus !== 'ready' || generating) return;
+
+        setGenerating(true);
+        const userText = input;
+        setInput('');
+
+        // Create User Message
+        let newUserMsg;
+        if (isVisionModel && imageData && history.length <= 1) {
+            // First message with image attachment
+            // WebLLM expects content to be array for multimodal
+            newUserMsg = {
+                role: 'user',
+                content: [
+                    { type: "text", text: userText },
+                    { type: "image_url", image_url: { url: imageData } }
+                ]
+            };
+        } else {
+            newUserMsg = { role: 'user', content: userText };
+        }
+
+        const newHistory = [...history, newUserMsg];
+        setHistory(newHistory); // Optimistic UI update (might need parsing for complex object)
+
+        try {
+            await dispatch(generateResponse(newHistory)).unwrap();
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setGenerating(false);
+        }
+    };
+
+    // Helper to render message content (which might be array now)
+    const renderContent = (content) => {
+        if (typeof content === 'string') return content;
+        if (Array.isArray(content)) {
+            return content.map((c, i) => c.text || '').join(' '); // Just show text part in UI
+        }
+        return '';
+    };
+
+    const handleClearCache = async () => {
+        if (confirm("This will delete all downloaded AI models to free up space. Continue?")) {
+            const { webLLMService } = await import('@/services/ai/webllm.service');
+            await webLLMService.deleteModelCache();
+            window.location.reload(); // Reload to reset state
+        }
+    };
 
     return (
-        <Card className="h-[600px] flex flex-col">
-            <CardHeader className="py-3 border-b">
+        <Card className="h-[600px] flex flex-col transition-all duration-300">
+            <CardHeader className="py-3 border-b flex flex-row items-center justify-between space-y-0">
                 <CardTitle className="text-sm font-medium flex items-center gap-2">
                     <Bot className="h-4 w-4" />
                     Chat with {activeModel || 'AI'}
+                    <Button variant="ghost" size="icon" className="h-6 w-6 ml-2 text-muted-foreground" onClick={handleClearCache} title="Clear Model Cache">
+                        <Trash2 className="h-3 w-3" />
+                    </Button>
                 </CardTitle>
+                <div className="flex items-center gap-2">
+                    <Select value={selectedDocId} onValueChange={setSelectedDocId}>
+                        <SelectTrigger className="w-[180px] h-8 text-xs">
+                            <SelectValue placeholder="Attach Document" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="none">No Context</SelectItem>
+                            {documents.map(doc => (
+                                <SelectItem key={doc.id} value={doc.id} className="text-xs">
+                                    <div className="flex items-center gap-2 truncate">
+                                        {doc.fileType === 'pdf' ? <FileText className="h-3 w-3" /> : <ImageIcon className="h-3 w-3" />}
+                                        <span className="truncate max-w-[120px]">{doc.fileName}</span>
+                                    </div>
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
             </CardHeader>
             <CardContent className="flex-1 p-0 overflow-hidden">
-                <ScrollArea className="h-full p-4">
+                <div className="flex-1 overflow-y-auto p-4">
                     <div className="space-y-4">
-                        {history.length === 0 && (
+                        {isVisionModel && imageData && (
+                            <div className="flex justify-center mb-4">
+                                <div className="relative group">
+                                    <img src={imageData} alt="Context" className="h-32 w-auto border rounded-lg shadow-sm" />
+                                    <Badge className="absolute top-1 right-1 px-1 py-0 text-[10px]">Context</Badge>
+                                </div>
+                            </div>
+                        )}
+
+                        {history.length === 0 && !imageData && (
                             <div className="text-center text-muted-foreground mt-20">
                                 <Bot className="h-12 w-12 mx-auto mb-2 opacity-20" />
                                 <p>Load a model and say hello!</p>
@@ -109,11 +222,8 @@ export function AIChat() {
 
                         {history.map((msg, i) => (
                             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[80%] rounded-lg px-4 py-2 ${msg.role === 'user'
-                                        ? 'bg-primary text-primary-foreground'
-                                        : 'bg-muted border'
-                                    }`}>
-                                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                                <div className={`max-w-[80%] rounded-lg px-4 py-2 ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted border'}`}>
+                                    <p className="text-sm whitespace-pre-wrap">{renderContent(msg.content)}</p>
                                 </div>
                             </div>
                         ))}
@@ -121,35 +231,29 @@ export function AIChat() {
                         {generating && (
                             <div className="flex justify-start">
                                 <div className="max-w-[80%] rounded-lg px-4 py-2 bg-muted border animate-pulse">
-                                    <p className="text-sm whitespace-pre-wrap">
-                                        {streamingResponse || 'Thinking...'}
-                                    </p>
+                                    <p className="text-sm whitespace-pre-wrap">{streamingResponse || 'Thinking...'}</p>
                                 </div>
                             </div>
                         )}
-
                         <div ref={scrollRef} />
                     </div>
-                </ScrollArea>
+                </div>
             </CardContent>
             <CardFooter className="p-3 border-t">
                 <div className="flex w-full items-center space-x-2">
                     <Input
-                        placeholder={!activeModel ? "Load a model first..." : "Type your message..."}
+                        placeholder={isLoadingImage ? "Processing image..." : (selectedDoc ? `Ask about ${selectedDoc.fileName}...` : "Type a message...")}
                         value={input}
                         onChange={e => setInput(e.target.value)}
-                        onKeyDown={e => e.key === 'Enter' && !e.shiftKey && onSend()}
-                        disabled={!activeModel || modelStatus !== 'ready' || generating}
+                        onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
+                        disabled={!activeModel || modelStatus !== 'ready' || generating || isLoadingImage}
                     />
-                    <Button
-                        size="icon"
-                        onClick={onSend}
-                        disabled={!activeModel || modelStatus !== 'ready' || generating}
-                    >
-                        <Send className="h-4 w-4" />
+                    <Button size="icon" onClick={handleSend} disabled={!activeModel || modelStatus !== 'ready' || generating || isLoadingImage}>
+                        {isLoadingImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                     </Button>
                 </div>
             </CardFooter>
         </Card>
     );
 }
+

@@ -5,6 +5,7 @@
   "private": true,
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.80",
+    "@pdfme/common": "^5.5.7",
     "@pdfme/generator": "^5.5.7",
     "@pdfme/ui": "^5.5.7",
     "@radix-ui/react-dialog": "^1.1.15",

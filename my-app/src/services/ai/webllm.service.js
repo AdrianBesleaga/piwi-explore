@@ -1,4 +1,4 @@
-import { CreateMLCEngine } from "@mlc-ai/web-llm";
+import { WebWorkerMLCEngine } from "@mlc-ai/web-llm";
 import Worker from '../../workers/llm.worker?worker';
 
 class WebLLMService {
@@ -17,8 +17,8 @@ class WebLLMService {
         this.worker = new Worker();
 
         // Create the engine interface that communicates with the worker
-        // CreateMLCEngine handles the handshake and proxying
-        this.engine = await CreateMLCEngine(this.worker, {
+        // We use the class constructor directly to avoid auto-loading a model immediately
+        this.engine = new WebWorkerMLCEngine(this.worker, {
             initProgressCallback: (report) => {
                 // We'll attach a listener for this in the UI/Slice later
                 // For now, we rely on the custom callback we pass to reload/load
@@ -42,14 +42,19 @@ class WebLLMService {
 
         // Reload/Load the model
         // This downloads weights if not cached
-        await this.engine.reload(modelId);
+        // We limit context_window_size to 2048 to reduce RAM usage (KV cache)
+        const chatOpts = {
+            context_window_size: 2048
+        };
+
+        await this.engine.reload(modelId, chatOpts);
 
         this.onProgress = null;
         return true;
     }
 
     /**
-     * Generate text from a prompt
+     * Generate text from a prompt (Streaming)
      * @param {Array<{role: string, content: string}>} messages 
      * @param {Function} onUpdate - Streaming callback
      */
@@ -69,6 +74,93 @@ class WebLLMService {
         }
 
         return fullText;
+    }
+
+    /**
+     * Internal helper for non-streaming JSON completion
+     */
+    async _jsonCompletion(messages) {
+        if (!this.engine) throw new Error("Engine not initialized");
+
+        const completion = await this.engine.chat.completions.create({
+            messages,
+            stream: false,
+            response_format: { type: "json_object" }
+        });
+
+        const content = completion.choices[0].message.content;
+        try {
+            return JSON.parse(content);
+        } catch (e) {
+            console.error("Failed to parse JSON response:", content);
+            throw new Error("AI response was not valid JSON");
+        }
+    }
+
+    /**
+     * Classify a document based on its text
+     * @param {string} text 
+     * @returns {Promise<{type: string, confidence: number}>}
+     */
+    async classifyDocument(text) {
+        if (!this.engine) {
+            console.log("AI Model not loaded, skipping classification.");
+            return null;
+        }
+
+        const { getClassificationPrompt } = await import('../../utils/schemas');
+        const systemPrompt = getClassificationPrompt();
+
+        // Truncate text to avoid token limits (e.g. first 2000 chars)
+        const truncatedText = text.slice(0, 2000);
+
+        const messages = [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: truncatedText }
+        ];
+
+        return this._jsonCompletion(messages);
+    }
+
+    async extractData(text, type) {
+        if (!this.engine) {
+            console.log("AI Model not loaded, skipping extraction.");
+            return null;
+        }
+
+        const { getExtractionPrompt } = await import('../../utils/schemas');
+        const systemPrompt = getExtractionPrompt(type);
+
+        if (!systemPrompt) {
+            throw new Error(`Unknown document type: ${type}`);
+        }
+
+        // We might need more text for extraction, but still be mindful of limits
+        // 4000 chars ~ 1000 tokens. 
+        const truncatedText = text.slice(0, 6000);
+
+        const messages = [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: truncatedText }
+        ];
+
+        return this._jsonCompletion(messages);
+    }
+
+    /**
+     * Clear all cached models to free up space
+     */
+    async deleteModelCache() {
+        if ('caches' in window) {
+            const keys = await caches.keys();
+            const webllmKeys = keys.filter(k => k.startsWith('webllm/'));
+            for (const key of webllmKeys) {
+                await caches.delete(key);
+            }
+            console.log(`Deleted ${webllmKeys.length} cache entries.`);
+            return webllmKeys.length;
+        }
+        return 0;
     }
 }
 

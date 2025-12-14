@@ -1,6 +1,7 @@
 import documentStorageService from '../storage/documentStorage.service';
 import { pdfService } from '../pdf/pdfjs.service';
 import { ocrService } from '../ocr/tesseract.service';
+import { webLLMService } from './webllm.service';
 
 class ExtractionService {
     constructor() {
@@ -93,32 +94,74 @@ class ExtractionService {
             if (isCancelled) throw new Error('Cancelled');
 
             // 3. Update document with results
-            const updates = {
-                extractedText: extractionResult.text,
-                status: 'completed',
-                metadata: {
-                    ...doc.metadata,
-                    extractionMetadata: extractionResult.metadata,
-                    confidence: extractionResult.confidence
-                }
-            };
+            // 4. Update progress
+            updateProgress({
+                status: 'saving',
+                progress: 0.9,
+                percent: 90
+            });
 
-            await documentStorageService.updateDocument(documentId, updates);
-            await documentStorageService.updateProcessingJob(documentId, { status: 'completed', progress: 100 });
+            // 5. Run AI Classification & Extraction (if available)
+            let aiResult = {};
+            try {
+                // Check if we can run AI (naive check, usually service throws if not ready)
+                updateProgress({ status: 'classifying', progress: 0.92, percent: 92 });
+
+                const classification = await webLLMService.classifyDocument(extractionResult.text);
+                console.log('Document Classification:', classification);
+
+                if (classification && classification.type) {
+                    let typeToExtract = classification.type;
+
+                    // Fallback to generic if 'other' or unknown
+                    if (typeToExtract === 'other' || !classification.type) {
+                        console.log("Type is 'other', falling back to 'generic' extraction.");
+                        typeToExtract = 'generic';
+                    }
+
+                    aiResult.documentType = typeToExtract;
+
+                    updateProgress({ status: 'extracting_data', progress: 0.95, percent: 95 });
+                    const structuredData = await webLLMService.extractData(extractionResult.text, typeToExtract);
+                    console.log('Structured Data:', structuredData);
+                    aiResult.extractedData = structuredData;
+                }
+            } catch (error) {
+                console.warn('AI Processing skipped or failed:', error.message);
+                // We proceed with just text if AI fails (e.g. model not loaded)
+            }
+
+            // 6. Save results
+            await documentStorageService.updateDocument(documentId, {
+                status: 'completed',
+                extractedText: extractionResult.text,
+                metadata: {
+                    ...extractionResult.metadata,
+                    ocrConfidence: extractionResult.confidence
+                },
+                processingError: null,
+                // Add AI results if any
+                ...(aiResult.documentType ? { documentType: aiResult.documentType } : {}),
+                ...(aiResult.extractedData ? { extractedData: aiResult.extractedData } : {})
+            });
+
+            // 7. Complete job
+            await documentStorageService.updateProcessingJob(jobId, {
+                status: 'completed',
+                progress: 1,
+                completedAt: new Date().toISOString()
+            });
 
             console.log(`Document ${documentId} processed successfully`);
-            this.activeJobs.delete(documentId);
-            return updates;
-
-
+            return {
+                status: 'completed',
+                extractedText: extractionResult.text,
+                documentType: aiResult.documentType,
+                extractedData: aiResult.extractedData
+            };
 
         } catch (error) {
-            this.activeJobs.delete(documentId);
-            if (error.message === 'Cancelled') {
-                // Already handled in cancelDocument, but just in case
-                return { status: 'cancelled' };
-            }
-            console.error(`Error processing document ${documentId}:`, error);
+            console.error('Processing failed:', error);
 
             // Update status to failed
             await documentStorageService.updateDocument(documentId, {
@@ -127,10 +170,21 @@ class ExtractionService {
             });
 
             if (jobId) {
-                await documentStorageService.updateProcessingJob(documentId, { status: 'failed', error: error.message });
+                await documentStorageService.updateProcessingJob(jobId, {
+                    status: 'failed',
+                    error: error.message,
+                    completedAt: new Date().toISOString()
+                });
+            }
+
+            if (error.message === 'Cancelled') {
+                // Already handled in cancelDocument, but just in case
+                return { status: 'cancelled' };
             }
 
             throw error;
+        } finally {
+            this.activeJobs.delete(documentId);
         }
     }
 

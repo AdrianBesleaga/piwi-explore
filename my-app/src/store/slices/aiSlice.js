@@ -41,10 +41,22 @@ const aiSlice = createSlice({
         streamingResponse: '',
         error: null,
         availableModels: [
-            { id: "Llama-3-8B-Instruct-q4f32_1-MLC", name: "Llama 3 (8B)", size: "5.2GB" },
-            { id: "Phi-3-mini-4k-instruct-q4f32_1-MLC", name: "Phi 3 Mini (3.8B)", size: "2.3GB" },
-            { id: "Qwen2-7B-Instruct-q4f32_1-MLC", name: "Qwen2 (7B)", size: "4.1GB" },
-            { id: "Gemma-2b-it-q4f32_1-MLC", name: "Gemma 2B", size: "1.3GB" }
+            // Efficient Models (Low VRAM/RAM)
+            { id: "Phi-3-mini-4k-instruct-q4f16_1-MLC", name: "Phi 3 Mini (3.8B) - Efficient", size: "2.3GB" },
+            { id: "Llama-3-8B-Instruct-q4f16_1-MLC", name: "Llama 3 (8B) - Efficient", size: "4.6GB" },
+            { id: "Gemma-2b-it-q4f16_1-MLC", name: "Gemma 2B - Efficient", size: "1.3GB" },
+            { id: "TinyLlama-1.1B-Chat-v1.0-q4f16_1-MLC", name: "TinyLlama (1.1B) - Fast", size: "698MB" },
+
+            // Standard Models (Higher Quality, High VRAM/RAM)
+            { id: "Llama-3-8B-Instruct-q4f32_1-MLC", name: "Llama 3 (8B) - Standard", size: "5.2GB" },
+            { id: "Phi-3-mini-4k-instruct-q4f32_1-MLC", name: "Phi 3 Mini (3.8B) - Standard", size: "3.2GB" }, // Corrected size reflection if needed, usually slightly larger than f16
+            { id: "Qwen2-7B-Instruct-q4f32_1-MLC", name: "Qwen2 (7B) - Standard", size: "4.1GB" },
+            { id: "Gemma-2b-it-q4f32_1-MLC", name: "Gemma 2B - Standard", size: "1.8GB" },
+
+            // Multimodal (Vision) Models
+            // Note: These require high VRAM/RAM (approx 8GB+)
+            { id: "Llama-3.2-11B-Vision-Instruct-q4f16_1-MLC", name: "Llama 3.2 Vision (11B)", size: "6.3GB" },
+            { id: "Phi-3.5-vision-instruct-q4f16_1-MLC", name: "Phi 3.5 Vision (4.2B)", size: "2.4GB" }
         ]
     },
     reducers: {

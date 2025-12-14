@@ -16,6 +16,7 @@ import ClientList from './pages/ClientList';
 import ClientDetail from './pages/ClientDetail';
 import Settings from './pages/Settings';
 import AIPlayground from './pages/AIPlayground';
+import TemplateManagement from './pages/TemplateManagement';
 import UnsupportedBrowser from './pages/UnsupportedBrowser';
 
 // Loading component
@@ -76,6 +77,7 @@ function App() {
               <Route path="settings" element={<Settings />} />
               <Route path="settings" element={<Settings />} />
               <Route path="ai" element={<AIPlayground />} />
+              <Route path="templates" element={<TemplateManagement />} />
               {/* Add more routes as needed */}
             </Route>
 
