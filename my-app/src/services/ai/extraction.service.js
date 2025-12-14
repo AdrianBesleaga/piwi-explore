@@ -79,7 +79,7 @@ class ExtractionService {
             if (doc.fileType === 'pdf') {
                 extractionResult = await pdfService.extractTextFromPDF(doc.fileBlob, updateProgress);
             } else if (doc.fileType === 'image') {
-                extractionResult = await ocrService.extractTextFromImage(doc.fileBlob, updateProgress);
+                extractionResult = await ocrService.extractTextFromImage(doc.fileBlob, 'eng+ita', updateProgress);
             } else if (doc.fileType === 'text') {
                 // Simple text file reading
                 updateProgress(10);

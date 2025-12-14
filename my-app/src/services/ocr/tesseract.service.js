@@ -39,10 +39,16 @@ class OcrService {
     /**
      * Extract text from an image using a Cloud/Local OCR Web Worker
      * @param {Blob} imageBlob - The Image file blob
-     * @param {Function} onProgress - Optional callback for progress updates
+     * @param {string} [language='eng'] - Language code (e.g. 'eng', 'eng+ita')
+     * @param {Function} [onProgress] - Optional callback for progress updates
      * @returns {Promise<{text: string, confidence: number}>}
      */
-    extractTextFromImage(imageBlob, onProgress) {
+    extractTextFromImage(imageBlob, language = 'eng', onProgress) {
+        if (typeof language === 'function') {
+            onProgress = language;
+            language = 'eng';
+        }
+
         return new Promise((resolve, reject) => {
             const id = crypto.randomUUID();
             this.jobs.set(id, { resolve, reject, onProgress });
@@ -51,7 +57,7 @@ class OcrService {
             worker.postMessage({
                 type: 'EXTRACT_TEXT',
                 id,
-                payload: { fileBlob: imageBlob }
+                payload: { fileBlob: imageBlob, language }
             });
         });
     }
