@@ -31,14 +31,46 @@ class WebLLMService {
     }
 
     /**
-     * Load a specific model
-     * @param {string} modelId 
-     * @param {Function} onProgress 
+     * Load a specific model with enhanced error handling
+     * @param {string} modelId
+     * @param {Function} onProgress
      */
     async loadModel(modelId, onProgress) {
-        if (!this.engine) await this.initialize();
+        console.log('[WebLLMService] loadModel called with:', modelId);
+
+        if (!this.engine) {
+            console.log('[WebLLMService] Engine not initialized, initializing...');
+            await this.initialize();
+        }
 
         this.onProgress = onProgress;
+        console.log('[WebLLMService] Checking if vision model...');
+
+        // Check if this is a vision model
+        const isVision = this.isVisionModel(modelId);
+        console.log('[WebLLMService] isVision:', isVision);
+
+        // If vision model, check WebGPU capabilities
+        if (isVision) {
+            console.log('[WebLLMService] Vision model detected, checking WebGPU support...');
+            const gpuCheck = await this.checkWebGPUSupport();
+            console.log('[WebLLMService] WebGPU check:', gpuCheck);
+
+            if (!gpuCheck.supported) {
+                throw new Error(`Cannot load vision model: ${gpuCheck.error}`);
+            }
+
+            if (!gpuCheck.hasShaderF16) {
+                console.warn('[WebLLMService] Warning: shader-f16 not supported. Vision model may fail to load.');
+                // Continue anyway but warn user
+                if (onProgress) {
+                    onProgress({
+                        text: 'Warning: Your GPU may not support this model',
+                        progress: 0
+                    });
+                }
+            }
+        }
 
         // Reload/Load the model
         // This downloads weights if not cached
@@ -47,10 +79,68 @@ class WebLLMService {
             context_window_size: 2048
         };
 
-        await this.engine.reload(modelId, chatOpts);
+        console.log('[WebLLMService] Starting model reload with options:', chatOpts);
 
-        this.onProgress = null;
-        return true;
+        try {
+            await this.engine.reload(modelId, chatOpts);
+            console.log('[WebLLMService] Model loaded successfully!');
+            this.onProgress = null;
+            return { success: true, modelId };
+
+        } catch (error) {
+            console.error('[WebLLMService] Error loading model:', error);
+            this.onProgress = null;
+
+            const errorMessage = error.message || String(error) || 'Unknown error';
+
+            // Detect Storage Quota / Cache errors
+            if (errorMessage.includes('Cache') ||
+                errorMessage.includes('Quota') ||
+                errorMessage.includes('NetworkError') ||
+                errorMessage.includes('Failed to execute \'add\' on \'Cache\'')) {
+                throw new Error(
+                    `Browser Storage Full (Quota Exceeded).\n\n` +
+                    `You have downloaded too many models (Phi-3.5 is ~4.2GB).\n` +
+                    `Please click the "🗑️ Clear Cache" button to free up space, then try again.`
+                );
+            }
+
+            // Detect specific shader/WebGPU errors
+            if (errorMessage.includes('WGSL') ||
+                errorMessage.includes('shader') ||
+                errorMessage.includes('chromium_experimental') ||
+                errorMessage.includes('u8')) {
+
+                const alternative = this.getAlternativeModel(modelId);
+                const altText = alternative ? `\n\nTry alternative: ${alternative}` : '';
+
+                throw new Error(
+                    `WebGPU Shader Error: This model requires experimental browser features that are not available.\n\n` +
+                    `Error details: ${errorMessage}\n\n` +
+                    `Suggestions:\n` +
+                    `1. Try Florence-2-base (340MB, excellent for documents)\n` +
+                    `2. Use a text-only model like Qwen2.5 or Phi-3-mini\n` +
+                    `3. Update to the latest Chrome/Edge browser${altText}`
+                );
+            }
+
+            // Detect missing parameter errors (Phi-3.5-vision specific issue)
+            if (error.message.includes('Cannot find parameter in cache') ||
+                error.message.includes('vision_embed_tokens')) {
+
+                throw new Error(
+                    `Model Loading Error: The Phi-3.5-vision model has known compatibility issues.\n\n` +
+                    `Error: ${error.message}\n\n` +
+                    `Recommendations:\n` +
+                    `• Use Llama-3.2-11B-Vision-Instruct-q4f16_1-MLC (better WebLLM support)\n` +
+                    `• Try Florence-2-base via Transformers.js (340MB, faster, excellent OCR)\n` +
+                    `• Use SmolVLM-500M for browser-optimized VQA`
+                );
+            }
+
+            // Generic error passthrough
+            throw error;
+        }
     }
 
     /**
@@ -161,6 +251,81 @@ class WebLLMService {
             return webllmKeys.length;
         }
         return 0;
+    }
+
+    /**
+     * Check if WebGPU supports required features for vision models
+     * @returns {Promise<{supported: boolean, features: string[], hasShaderF16: boolean, error: string|null}>}
+     */
+    async checkWebGPUSupport() {
+        if (!navigator.gpu) {
+            return {
+                supported: false,
+                features: [],
+                hasShaderF16: false,
+                error: 'WebGPU is not supported in this browser'
+            };
+        }
+
+        try {
+            const adapter = await navigator.gpu.requestAdapter();
+            if (!adapter) {
+                return {
+                    supported: false,
+                    features: [],
+                    hasShaderF16: false,
+                    error: 'No WebGPU adapter available'
+                };
+            }
+
+            const features = Array.from(adapter.features);
+
+            // Check for shader-f16 support (required for vision models)
+            const hasShaderF16 = features.includes('shader-f16');
+
+            // Log available features for debugging
+            console.log('WebGPU Features:', features);
+
+            return {
+                supported: true,
+                features: features,
+                hasShaderF16: hasShaderF16,
+                error: null
+            };
+        } catch (error) {
+            return {
+                supported: false,
+                features: [],
+                hasShaderF16: false,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Check if a model is a vision model
+     * @param {string} modelId
+     * @returns {boolean}
+     */
+    isVisionModel(modelId) {
+        if (!modelId) return false;
+        return modelId.includes('Vision') ||
+            modelId.includes('vision') ||
+            modelId.includes('Llava');
+    }
+
+    /**
+     * Get recommended alternative for a failed model
+     * @param {string} failedModelId
+     * @returns {string|null}
+     */
+    getAlternativeModel(failedModelId) {
+        const alternatives = {
+            'Phi-3.5-vision-instruct-q4f16_1-MLC': 'Llama-3.2-11B-Vision-Instruct-q4f16_1-MLC',
+            'Llama-3.2-11B-Vision-Instruct-q4f16_1-MLC': 'Phi-3-mini-4k-instruct-q4f16_1-MLC', // Fallback to text
+        };
+
+        return alternatives[failedModelId] || null;
     }
 }
 

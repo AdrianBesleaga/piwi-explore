@@ -11,8 +11,10 @@ export function ModelManager() {
     const dispatch = useDispatch();
     const { availableModels, activeModel, modelStatus, downloadProgress, error } = useSelector(state => state.ai);
 
-    const handleLoad = (modelId) => {
-        dispatch(loadModel(modelId));
+    const handleLoad = (model) => {
+        console.log('[ModelManager] handleLoad called with:', model);
+        console.log('[ModelManager] model.id:', model?.id, 'model.provider:', model?.provider);
+        dispatch(loadModel({ modelId: model.id, provider: model.provider }));
     };
 
     return (
@@ -58,7 +60,7 @@ export function ModelManager() {
                                     <Button
                                         variant={activeModel === model.id ? "outline" : "default"}
                                         disabled={modelStatus === 'loading'}
-                                        onClick={() => handleLoad(model.id)}
+                                        onClick={() => handleLoad(model)}
                                     >
                                         {activeModel === model.id ? (
                                             <>

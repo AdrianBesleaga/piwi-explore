@@ -6,8 +6,9 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { generateResponse, clearStreamingResponse } from '@/store/slices/aiSlice';
-import { Send, Bot, FileText, ImageIcon, Loader2, Trash2 } from 'lucide-react';
+import { Send, Bot, FileText, ImageIcon, Loader2, Trash2, AlertTriangle } from 'lucide-react';
 import { documentStorageService } from '@/services/storage/documentStorage.service';
+import { webLLMService } from '@/services/ai/webllm.service';
 import * as pdfjsLib from 'pdfjs-dist';
 
 // Initialize PDF.js worker
@@ -19,7 +20,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export function AIChat() {
     const dispatch = useDispatch();
-    const { activeModel, modelStatus, streamingResponse } = useSelector(state => state.ai);
+    const { activeModel, modelStatus, streamingResponse, availableModels } = useSelector(state => state.ai);
     const documents = useSelector(state => state.documents.items);
 
     const [input, setInput] = useState('');
@@ -28,11 +29,17 @@ export function AIChat() {
     const [selectedDocId, setSelectedDocId] = useState('none');
     const [imageData, setImageData] = useState(null); // Base64 of attached image (or rendered PDF page)
     const [isLoadingImage, setIsLoadingImage] = useState(false);
+    const [webGPUSupport, setWebGPUSupport] = useState(null); // WebGPU capability check
 
     const scrollRef = useRef(null);
     const selectedDoc = documents.find(d => d.id === selectedDocId);
 
-    const isVisionModel = activeModel?.includes('Vision') || activeModel?.includes('Llava');
+    // Get active model metadata
+    const activeModelData = availableModels.find(m => m.id === activeModel);
+
+    const isVisionModel = activeModel?.includes('Vision') || activeModel?.includes('Llava') ||
+        activeModel?.includes('vision') || activeModel?.includes('Florence') ||
+        activeModel?.includes('moondream');
 
     // Handle Document Selection & Image Conversion
     useEffect(() => {
@@ -120,8 +127,44 @@ Answer questions based on the context above.`
         }
     }, [generating]);
 
+    // Check WebGPU support on mount
+    useEffect(() => {
+        const checkGPU = async () => {
+            const support = await webLLMService.checkWebGPUSupport();
+            setWebGPUSupport(support);
+        };
+        checkGPU();
+    }, []);
+
+    // Get warning for current model
+    const getModelWarning = () => {
+        if (!activeModelData) return null;
+
+        const warnings = [];
+
+        // Check if model is experimental
+        if (activeModelData.experimental) {
+            warnings.push(activeModelData.warning || 'This model is experimental and may have compatibility issues.');
+        }
+
+        // Check WebGPU compatibility for vision models
+        if (isVisionModel && webGPUSupport && !webGPUSupport.hasShaderF16) {
+            warnings.push('Your GPU may not fully support this vision model (shader-f16 missing).');
+        }
+
+        if (isVisionModel && webGPUSupport && !webGPUSupport.supported) {
+            warnings.push('WebGPU is not available. Vision models require WebGPU support.');
+        }
+
+        return warnings.length > 0 ? warnings : null;
+    };
+
+    const modelWarnings = getModelWarning();
+
     const handleSend = async () => {
         if (!input.trim() || !activeModel || modelStatus !== 'ready' || generating) return;
+
+        console.log('[AIChat] handleSend called, imageData:', !!imageData, 'history length:', history.length);
 
         setGenerating(true);
         const userText = input;
@@ -129,9 +172,9 @@ Answer questions based on the context above.`
 
         // Create User Message
         let newUserMsg;
-        if (isVisionModel && imageData && history.length <= 1) {
-            // First message with image attachment
-            // WebLLM expects content to be array for multimodal
+        if (isVisionModel && imageData) {
+            // Vision model with image - ALWAYS include image for context
+            console.log('[AIChat] Creating multimodal message with image');
             newUserMsg = {
                 role: 'user',
                 content: [
@@ -140,16 +183,19 @@ Answer questions based on the context above.`
                 ]
             };
         } else {
+            console.log('[AIChat] Creating text-only message');
             newUserMsg = { role: 'user', content: userText };
         }
 
         const newHistory = [...history, newUserMsg];
-        setHistory(newHistory); // Optimistic UI update (might need parsing for complex object)
+        setHistory(newHistory);
 
         try {
+            console.log('[AIChat] Dispatching generateResponse...');
             await dispatch(generateResponse(newHistory)).unwrap();
+            console.log('[AIChat] generateResponse completed');
         } catch (err) {
-            console.error(err);
+            console.error('[AIChat] Error generating response:', err);
         } finally {
             setGenerating(false);
         }
@@ -174,32 +220,58 @@ Answer questions based on the context above.`
 
     return (
         <Card className="h-[600px] flex flex-col transition-all duration-300">
-            <CardHeader className="py-3 border-b flex flex-row items-center justify-between space-y-0">
-                <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <Bot className="h-4 w-4" />
-                    Chat with {activeModel || 'AI'}
-                    <Button variant="ghost" size="icon" className="h-6 w-6 ml-2 text-muted-foreground" onClick={handleClearCache} title="Clear Model Cache">
-                        <Trash2 className="h-3 w-3" />
-                    </Button>
-                </CardTitle>
-                <div className="flex items-center gap-2">
-                    <Select value={selectedDocId} onValueChange={setSelectedDocId}>
-                        <SelectTrigger className="w-[180px] h-8 text-xs">
-                            <SelectValue placeholder="Attach Document" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="none">No Context</SelectItem>
-                            {documents.map(doc => (
-                                <SelectItem key={doc.id} value={doc.id} className="text-xs">
-                                    <div className="flex items-center gap-2 truncate">
-                                        {doc.fileType === 'pdf' ? <FileText className="h-3 w-3" /> : <ImageIcon className="h-3 w-3" />}
-                                        <span className="truncate max-w-[120px]">{doc.fileName}</span>
-                                    </div>
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
+            <CardHeader className="py-3 border-b space-y-2">
+                <div className="flex flex-row items-center justify-between space-y-0">
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                        <Bot className="h-4 w-4" />
+                        Chat with {activeModel || 'AI'}
+                        <Button variant="ghost" size="icon" className="h-6 w-6 ml-2 text-muted-foreground" onClick={handleClearCache} title="Clear Model Cache">
+                            <Trash2 className="h-3 w-3" />
+                        </Button>
+                    </CardTitle>
+                    <div className="flex items-center gap-2">
+                        <Select value={selectedDocId} onValueChange={setSelectedDocId}>
+                            <SelectTrigger className="w-[180px] h-8 text-xs">
+                                <SelectValue placeholder="Attach Document" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="none">No Context</SelectItem>
+                                {documents.map(doc => (
+                                    <SelectItem key={doc.id} value={doc.id} className="text-xs">
+                                        <div className="flex items-center gap-2 truncate">
+                                            {doc.fileType === 'pdf' ? <FileText className="h-3 w-3" /> : <ImageIcon className="h-3 w-3" />}
+                                            <span className="truncate max-w-[120px]">{doc.fileName}</span>
+                                        </div>
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
                 </div>
+
+                {/* Model warnings and info */}
+                {activeModelData && (
+                    <div className="flex flex-col gap-1">
+                        {activeModelData.description && (
+                            <p className="text-xs text-muted-foreground">
+                                {activeModelData.description}
+                            </p>
+                        )}
+                        {activeModelData.capabilities && (
+                            <div className="flex gap-1">
+                                <Badge variant="outline" className="text-[10px] px-1 py-0">
+                                    {activeModelData.capabilities}
+                                </Badge>
+                            </div>
+                        )}
+                        {modelWarnings && modelWarnings.map((warning, idx) => (
+                            <div key={idx} className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
+                                <AlertTriangle className="h-3 w-3" />
+                                <span>{warning}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </CardHeader>
             <CardContent className="flex-1 p-0 overflow-hidden">
                 <div className="flex-1 overflow-y-auto p-4">
