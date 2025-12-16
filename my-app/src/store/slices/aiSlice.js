@@ -201,6 +201,23 @@ const aiSlice = createSlice({
                 provider: "transformers",
                 capabilities: "Document Layout & Structure Analysis",
                 description: "IBM's compact model for preserving document layout/tables/markdown."
+            },
+            {
+                id: "onnx-community/Qwen2-VL-7B-Instruct",
+                name: "Qwen2-VL 7B (ONNX) ⚠️ HIGH RAM",
+                size: "~4.5GB",
+                provider: "transformers",
+                capabilities: "Vision-Language, Video Understanding",
+                experimental: true,
+                description: "⚠️ Requires 8GB+ RAM. May crash browser. Powerful vision understanding."
+            },
+            {
+                id: "pdufour/Qwen2-VL-2B-Instruct-ONNX-Q4-F16",
+                name: "Qwen2-VL 2B (Local Cache) 🚀",
+                size: "~1.5GB",
+                provider: "transformers",
+                capabilities: "Fast Vision-Language (Cached)",
+                description: "Optimized local loading via cache. Offline capable."
             }
         ]
     },

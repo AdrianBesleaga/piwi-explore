@@ -1,16 +1,186 @@
-import { pipeline, env, Florence2ForConditionalGeneration, Qwen2VLForConditionalGeneration, AutoProcessor, RawImage } from '@huggingface/transformers';
+import { pipeline, env, Florence2ForConditionalGeneration, Qwen2VLForConditionalGeneration, AutoProcessor, AutoTokenizer, RawImage, Tensor } from '@huggingface/transformers';
+import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/ort.webgpu.mjs';
+
+// Browser-compatible helpers with Cache API support
+async function getModelFile(modelId, fileName) {
+    const url = `https://huggingface.co/${modelId}/resolve/main/${fileName}`;
+
+    // Try cache first
+    if (typeof window !== 'undefined' && 'caches' in window) {
+        try {
+            const cache = await caches.open('transformers-cache');
+            const cachedResponse = await cache.match(url);
+            if (cachedResponse) {
+                console.log('[Cache HIT]', fileName);
+                const buffer = await cachedResponse.arrayBuffer();
+                return new Uint8Array(buffer);
+            }
+        } catch (e) {
+            console.warn('[Cache] Failed to check cache:', e);
+        }
+    }
+
+    // Fetch from network
+    console.log('[Cache MISS] Fetching:', fileName);
+    const response = await env.fetch(url);
+    if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.statusText}`);
+
+    // Store in cache
+    if (typeof window !== 'undefined' && 'caches' in window) {
+        try {
+            const cache = await caches.open('transformers-cache');
+            await cache.put(url, response.clone());
+            console.log('[Cache STORED]', fileName);
+        } catch (e) {
+            console.warn('[Cache] Failed to store:', e);
+        }
+    }
+
+    const buffer = await response.arrayBuffer();
+    return new Uint8Array(buffer);
+}
+
+async function getModelJSON(modelId, fileName) {
+    const url = `https://huggingface.co/${modelId}/resolve/main/${fileName}`;
+
+    // Try cache first
+    if (typeof window !== 'undefined' && 'caches' in window) {
+        try {
+            const cache = await caches.open('transformers-cache');
+            const cachedResponse = await cache.match(url);
+            if (cachedResponse) {
+                console.log('[Cache HIT]', fileName);
+                return await cachedResponse.json();
+            }
+        } catch (e) {
+            console.warn('[Cache] Failed to check cache:', e);
+        }
+    }
+
+    // Fetch from network
+    console.log('[Cache MISS] Fetching:', fileName);
+    const response = await env.fetch(url);
+    if (!response.ok) throw new Error(`Failed to fetch ${url}`);
+
+    // Store in cache
+    if (typeof window !== 'undefined' && 'caches' in window) {
+        try {
+            const cache = await caches.open('transformers-cache');
+            await cache.put(url, response.clone());
+            console.log('[Cache STORED]', fileName);
+        } catch (e) {
+            console.warn('[Cache] Failed to store:', e);
+        }
+    }
+
+    return await response.json();
+}
 
 // Configure Transformers.js environment
-// Use local models cache instead of remote CDN for better performance
-env.allowLocalModels = false; // We want to download from HuggingFace
+// We allow remote models because strictly speaking we are requesting "remote" URLs (mocked by cache)
+env.allowLocalModels = false;
 env.allowRemoteModels = true;
+env.useBrowserCache = true;
+// Configure ONNX Runtime
+ort.env.wasm.numThreads = 1;
+ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/";
+
+// Export helpers for testing
+export { getModelFile, getModelJSON };
+
+// Qwen2-VL Constants
+const QWEN_CONSTANTS = {
+    INPUT_IMAGE_SIZE: [960, 960],
+    HEIGHT_FACTOR: 10,
+    WIDTH_FACTOR: 10,
+    GET_IMAGE_EMBED_SIZE: () => 10 * 10, // WIDTH_FACTOR * HEIGHT_FACTOR
+    MAX_SEQ_LENGTH: 1024,
+    MAX_SINGLE_CHAT_LENGTH: 200, // Increased for better responses
+    QUANT: "q4f16"
+};
+
+// Start Helper Functions
+function int64ToFloat16(int64Value) {
+    const float64Value = Number(int64Value);
+    if (!isFinite(float64Value)) return float64Value > 0 ? 0x7c00 : 0xfc00;
+    if (float64Value === 0) return 0;
+    const sign = float64Value < 0 ? 1 : 0;
+    const absValue = Math.abs(float64Value);
+    const exponent = Math.floor(Math.log2(absValue));
+    const mantissa = absValue / Math.pow(2, exponent) - 1;
+    const float16Exponent = exponent + 15;
+    const float16Mantissa = Math.round(mantissa * 1024);
+    if (float16Exponent <= 0) {
+        return (sign << 15) | (float16Mantissa >> 1);
+    } else if (float16Exponent >= 31) {
+        return (sign << 15) | 0x7c00;
+    } else {
+        return (sign << 15) | (float16Exponent << 10) | (float16Mantissa & 0x3ff);
+    }
+}
+
+function float16ToInt64(float16Value) {
+    const sign = (float16Value & 0x8000) >> 15;
+    const exponent = (float16Value & 0x7c00) >> 10;
+    const mantissa = float16Value & 0x03ff;
+    if (exponent === 0 && mantissa === 0) return BigInt(0);
+    if (exponent === 0x1f) return sign ? BigInt("-Infinity") : BigInt("Infinity");
+    let value;
+    if (exponent === 0) {
+        value = Math.pow(2, -14) * (mantissa / 1024);
+    } else {
+        value = Math.pow(2, exponent - 15) * (1 + mantissa / 1024);
+    }
+    value = sign ? -value : value;
+    return BigInt(Math.round(value));
+}
+
+// getModelFile and getModelJSON now imported from transformers.js hub utilities
+// End Helper Functions
 
 class TransformersService {
     constructor() {
-        this.model = null;
-        this.processor = null; // For Florence-2 models
+        this.model = null; // Used for generic models or Session A for Qwen Manual
+        this.processor = null;
+        this.tokenizer = null;
         this.modelId = null;
-        this.modelType = null; // 'florence', 'moondream', etc.
+        this.modelType = null;
+
+        // Manual Qwen2-VL Sessions
+        this.sessions = {
+            A: null,
+            B: null,
+            C: null,
+            D: null,
+            E: null
+        };
+        this.qwenConfig = null;
+
+        // Override env.fetch to provide Content-Length for large files where it's missing (GitHub Pages / some CDNs)
+        // This prevents "Array buffer allocation failed" by allowing pre-allocation instead of dynamic growth
+        const originalFetch = env.fetch || window.fetch.bind(window);
+        env.fetch = async (url, options) => {
+            const response = await originalFetch(url, options);
+
+            // Check if this is the large Qwen2-VL model file and Content-Length is missing
+            if (url.includes('decoder_model_merged_quantized.onnx') && !response.headers.get('content-length')) {
+                console.log('[TransformersService] Injecting Content-Length for large ONNX file to prevent OOM');
+
+                // Clone the response to modify headers
+                const newHeaders = new Headers(response.headers);
+                // 1.55GB = ~1,664,684,544 bytes. We set slightly higher to be safe: 1.7GB = 1,825,361,100
+                // Exact size isn't strictly required, just enough to pre-allocate a large enough buffer
+                newHeaders.set('content-length', '1825361100');
+
+                return new Response(response.body, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: newHeaders
+                });
+            }
+
+            return response;
+        };
     }
 
     /**
@@ -40,7 +210,7 @@ class TransformersService {
                 // Load Florence-2 model and processor
                 console.log('[TransformersService] Loading Florence2ForConditionalGeneration...');
                 this.model = await Florence2ForConditionalGeneration.from_pretrained(modelId, {
-                    dtype: 'fp32',
+                    dtype: 'fp16',
                     device: navigator.gpu ? 'webgpu' : 'wasm',
                     progress_callback: (progress) => {
                         if (onProgress && progress.status === 'progress') {
@@ -57,36 +227,62 @@ class TransformersService {
                 console.log('[TransformersService] Loading AutoProcessor...');
                 this.processor = await AutoProcessor.from_pretrained(modelId);
                 console.log('[TransformersService] Processor loaded:', !!this.processor);
-            } else if (modelIdLower.includes('qwen2-vl')) {
-                // Qwen2-VL - advanced vision-language model
+            } else if (modelIdLower.includes('qwen2-vl') || modelIdLower.includes('qwen2.5-vl')) {
+                // Qwen2-VL - Manual ONNX loading as per fix
                 this.modelType = 'qwen2-vl';
-                console.log('[TransformersService] Loading Qwen2-VL model...');
+                console.log('[TransformersService] Loading Qwen2-VL model (Manual ONNX approach)...');
 
-                if (onProgress) {
-                    onProgress({
-                        text: 'Downloading Qwen2-VL model from HuggingFace...',
-                        progress: 0
-                    });
-                }
+                // Seed cache - DISABLED because local files are missing, causing 404 HTML to be cached as ONNX
+                // if (modelId.includes('pdufour')) {
+                //     await seedQwen2VLCache((msg) => {
+                //         if (onProgress) onProgress({ status: 'initiate', name: modelId, file: msg });
+                //     });
+                // }
 
-                // Load Qwen2-VL model - uses similar approach to Florence-2
-                this.model = await Qwen2VLForConditionalGeneration.from_pretrained(modelId, {
-                    dtype: 'fp32',
-                    device: navigator.gpu ? 'webgpu' : 'wasm',
-                    progress_callback: (progress) => {
-                        if (onProgress && progress.status === 'progress') {
-                            const percent = progress.progress / 100;
-                            onProgress({
-                                text: `Downloading: ${progress.file || 'model files'}`,
-                                progress: percent
-                            });
-                        }
-                    }
-                });
-                console.log('[TransformersService] Qwen2-VL model loaded:', !!this.model);
+                const sessionOptions = {
+                    executionProviders: ["webgpu"],
+                    logSeverityLevel: 2,
+                    logVerbosityLevel: 1,
+                    enableProfiling: false, // Disabled profiling for prod
+                    graphOptimizationLevel: "all",
+                    executionMode: "sequential",
+                    intraOpNumThreads: 0,
+                    interOpNumThreads: 0,
+                };
 
-                this.processor = await AutoProcessor.from_pretrained(modelId);
-                console.log('[TransformersService] Qwen2-VL processor loaded:', !!this.processor);
+                const quant = QWEN_CONSTANTS.QUANT;
+
+                // Load basic config from ORIGINAL model repo (pdufour repo might lack these)
+                const baseModelId = "Qwen/Qwen2-VL-2B-Instruct";
+                this.qwenConfig = await getModelJSON(baseModelId, "config.json");
+                this.tokenizer = await AutoTokenizer.from_pretrained(baseModelId);
+                console.log('[TransformersService] Qwen config and tokenizer loaded from base repo:', baseModelId);
+
+                // Load Sessions A, B, C
+                console.log('[TransformersService] Loading Session A...');
+                if (onProgress) onProgress({ text: 'Loading Vision Encoder (Part A)...', progress: 0.2 });
+                this.sessions.A = await ort.InferenceSession.create(
+                    await getModelFile(modelId, `onnx/QwenVL_A_${quant}.onnx`),
+                    sessionOptions
+                );
+
+                console.log('[TransformersService] Loading Session B...');
+                if (onProgress) onProgress({ text: 'Loading Language Model (Part B)...', progress: 0.4 });
+                this.sessions.B = await ort.InferenceSession.create(
+                    await getModelFile(modelId, `onnx/QwenVL_B_${quant}.onnx`),
+                    sessionOptions
+                );
+
+                console.log('[TransformersService] Loading Session C...');
+                if (onProgress) onProgress({ text: 'Loading Position/Embeddings (Part C)...', progress: 0.6 });
+                this.sessions.C = await ort.InferenceSession.create(
+                    await getModelFile(modelId, `onnx/QwenVL_C_${quant}.onnx`),
+                    sessionOptions
+                );
+
+                // We set this.model to true/something to indicate loaded state for isLoaded()
+                this.model = true;
+                console.log('[TransformersService] Qwen2-VL manual sessions A, B, C loaded');
             } else if (modelIdLower.includes('moondream') || modelIdLower.includes('fastvlm') || modelIdLower.includes('granite')) {
                 // Moondream, FastVLM, and Granite use standard pipeline
                 this.modelType = 'moondream';
@@ -160,6 +356,16 @@ class TransformersService {
 
         } catch (error) {
             console.error('[TransformersService] Failed to load model:', error);
+
+            // Handle memory allocation errors specifically
+            if (error.name === 'RangeError' || error.message.includes('allocation failed') || error.message.includes('out of memory')) {
+                throw new Error(
+                    `Browser Memory Limit Exceeded.\n\n` +
+                    `The model "${modelId}" is too large for your browser's memory buffer (requires ~4.5GB contiguous RAM).\n\n` +
+                    `👉 Please try the "Qwen2-VL 2B" model instead, which is optimized for browser use (~1.5GB).`
+                );
+            }
+
             throw new Error(`Failed to load model: ${error.message}`);
         }
     }
@@ -238,6 +444,259 @@ class TransformersService {
                 // Extract the result for the task
                 result = postProcessed[task];
                 return result || JSON.stringify(postProcessed);
+
+            } else if (this.modelType === 'qwen2-vl') {
+                // Qwen2-VL Manual Generation Re-implementation
+                console.log('[TransformersService] Starting Qwen2-VL manual generation...');
+
+                const { INPUT_IMAGE_SIZE, HEIGHT_FACTOR, WIDTH_FACTOR, GET_IMAGE_EMBED_SIZE, MAX_SEQ_LENGTH, MAX_SINGLE_CHAT_LENGTH, QUANT } = QWEN_CONSTANTS;
+                const IMAGE_EMBED_SIZE = GET_IMAGE_EMBED_SIZE();
+
+                // Initialize Tensors
+                const prompt_head_len = new ort.Tensor("int64", new BigInt64Array([5n]), [1]);
+                let position_ids;
+                let num_decode = 0;
+                let history_len = new ort.Tensor("int64", new BigInt64Array([0n]), [1]);
+                const pos_factor_v = BigInt(1 - IMAGE_EMBED_SIZE + WIDTH_FACTOR);
+
+                let past_key_states = new ort.Tensor(
+                    "float16",
+                    new Float16Array(
+                        this.qwenConfig.num_hidden_layers *
+                        this.qwenConfig.num_key_value_heads *
+                        MAX_SEQ_LENGTH *
+                        (this.qwenConfig.hidden_size / this.qwenConfig.num_attention_heads)
+                    ).fill(0),
+                    [
+                        this.qwenConfig.num_hidden_layers,
+                        this.qwenConfig.num_key_value_heads,
+                        MAX_SEQ_LENGTH,
+                        this.qwenConfig.hidden_size / this.qwenConfig.num_attention_heads,
+                    ]
+                );
+
+                let past_value_states = past_key_states;
+                let attention_mask = new ort.Tensor("float16", new Float16Array([0xfbff]), [1]);
+                let pos_factor = new ort.Tensor("float16", new Float16Array([0]), [1]);
+
+                // Prepare Tokenizer Input
+                const messages = [
+                    {
+                        role: "user", content: [
+                            { type: "image" },
+                            { type: "text", text: prompt || "Describe this image." }
+                        ]
+                    }
+                ];
+
+                const templatePrompt = `\n<|im_start|>user\n<|vision_start|><|vision_end|>${prompt || "Describe this image."}<|im_end|>\n<|im_start|>assistant\n`;
+                // Prefer simple template construction to avoid issues with specialized templates
+                const token = await this.tokenizer(templatePrompt, {
+                    return_tensors: "pt",
+                    add_generation_prompt: false,
+                    tokenize: true,
+                }).input_ids;
+
+                const seq_length = token.dims[1];
+                let ids_len = new ort.Tensor("int64", new BigInt64Array([BigInt(seq_length)]), [1]);
+
+                let input_ids = new ort.Tensor(
+                    "int32",
+                    new Int32Array(MAX_SEQ_LENGTH).fill(0),
+                    [MAX_SEQ_LENGTH]
+                );
+                input_ids.data.set(Array.from(token.data.slice(0, seq_length), Number));
+
+                const dummy = new ort.Tensor("int32", new Int32Array([0]), []);
+
+                // Run Session B (Initial Text)
+                console.log("[TransformersService] Run Session B (Initial)");
+                let { hidden_states } = await this.sessions.B.run({
+                    input_ids: input_ids,
+                    ids_len: ids_len,
+                });
+
+                // Run Session C (Position IDs)
+                console.log("[TransformersService] Run Session C");
+                ({ position_ids } = await this.sessions.C.run({
+                    dummy: dummy,
+                }));
+
+                // Process Image
+                if (true) { // Always vision for now
+                    let rawImage;
+                    if (typeof image === 'string') {
+                        rawImage = await RawImage.fromURL(image);
+                    } else if (image instanceof Blob || image instanceof File) {
+                        const dataUrl = await new Promise((resolve) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => resolve(reader.result);
+                            reader.readAsDataURL(image);
+                        });
+                        rawImage = await RawImage.fromURL(dataUrl);
+                    } else {
+                        rawImage = image;
+                    }
+
+                    rawImage = await rawImage.resize(INPUT_IMAGE_SIZE[0], INPUT_IMAGE_SIZE[1]);
+                    rawImage = rawImage.rgb();
+                    rawImage = rawImage.toTensor("CHW");
+                    rawImage = rawImage.to("float32");
+                    rawImage = rawImage.div_(255.0);
+                    const pixel_values = rawImage.unsqueeze(0);
+
+                    // Re-init Session A if needed (we released it? no we keep it in service)
+                    // But example released it. To save memory, maybe we should release.
+                    // For now, let's keep A loaded or re-load.
+                    if (!this.sessions.A) {
+                        this.sessions.A = await ort.InferenceSession.create(
+                            await getModelFile(this.modelId, `onnx/QwenVL_A_${QUANT}.onnx`),
+                            { executionProviders: ["webgpu"] } // Simplified options
+                        );
+                    }
+
+                    console.log("[TransformersService] Run Session A");
+                    const { image_embed } = await this.sessions.A.run({
+                        pixel_values: pixel_values,
+                    });
+
+                    // Update ids_len manually since ort.Tensor doesn't have .add()
+                    ids_len = new ort.Tensor(
+                        "int64",
+                        new BigInt64Array([ids_len.data[0] + BigInt(IMAGE_EMBED_SIZE)]),
+                        [1]
+                    );
+
+                    const split_factor = new ort.Tensor(
+                        "int32",
+                        new Int32Array([MAX_SEQ_LENGTH - Number(ids_len.data[0]) - IMAGE_EMBED_SIZE]),
+                        [1]
+                    );
+
+                    const ids_len_minus = new ort.Tensor(
+                        "int32",
+                        new Int32Array([Number(ids_len.data[0]) - Number(prompt_head_len.data[0])]),
+                        [1]
+                    );
+
+                    // Release A to save memory
+                    await this.sessions.A.release();
+                    this.sessions.A = null;
+
+                    // Load Session D if needed
+                    if (!this.sessions.D) {
+                        console.log("[TransformersService] Loading Session D...");
+                        this.sessions.D = await ort.InferenceSession.create(
+                            await getModelFile(this.modelId, `onnx/QwenVL_D_${QUANT}.onnx`),
+                            { executionProviders: ["webgpu"] }
+                        );
+                    }
+
+                    console.log("[TransformersService] Run Session D");
+                    ({ hidden_states, position_ids } = await this.sessions.D.run({
+                        "hidden_states.1": hidden_states,
+                        image_embed,
+                        ids_len,
+                        ids_len_minus,
+                        split_factor,
+                    }));
+
+                    // Release D
+                    await this.sessions.D.release();
+                    this.sessions.D = null;
+                }
+
+                // Generation Loop
+                let outputText = '';
+
+                while (
+                    num_decode < MAX_SINGLE_CHAT_LENGTH &&
+                    Number(history_len.data[0]) < MAX_SEQ_LENGTH
+                ) {
+                    let token_id;
+
+                    if (!this.sessions.E) {
+                        console.log("[TransformersService] Loading Session E...");
+                        this.sessions.E = await ort.InferenceSession.create(
+                            await getModelFile(this.modelId, `onnx/QwenVL_E_${QUANT}.onnx`),
+                            {
+                                executionProviders: ["wasm"], // WASM for E as per example (often faster for small ops or less memory overhead?)
+                                executionMode: "sequential",
+                                intraOpNumThreads: 0
+                            }
+                        );
+                    }
+
+                    console.log("[TransformersService] Run Session E (Decode)"); // Verbose for debugging
+                    ({
+                        max_logit_ids: token_id,
+                        past_key_states: past_key_states,
+                        past_value_states: past_value_states,
+                    } = await this.sessions.E.run({
+                        hidden_states,
+                        attention_mask,
+                        "past_key_states.1": past_key_states,
+                        "past_value_states.1": past_value_states,
+                        history_len,
+                        ids_len,
+                        position_ids,
+                        pos_factor,
+                    }));
+
+                    if (token_id.data[0] === 151643n || token_id.data[0] === 151645n) { // Check BigInt or Number? ort returns BigInt usually for int64
+                        break;
+                    }
+                    // Handle number comparisons safely
+                    const tId = Number(token_id.data[0]);
+                    if (tId === 151643 || tId === 151645) break;
+
+                    num_decode++;
+                    if (num_decode < 2) {
+                        // Update history_len manually
+                        history_len = new ort.Tensor(
+                            "int64",
+                            new BigInt64Array([history_len.data[0] + BigInt(ids_len.data[0])]),
+                            [1]
+                        );
+                        ids_len = new ort.Tensor("int64", new BigInt64Array([1n]), [1]);
+                        attention_mask = new ort.Tensor("float16", new Float16Array([0]), [1]);
+
+                        // Vision logic assumption (we always do vision here)
+                        pos_factor = new ort.Tensor(
+                            "float16",
+                            new Float16Array([int64ToFloat16(pos_factor_v + ids_len.data[0])]),
+                            [1]
+                        );
+                    } else {
+                        // Update history_len manually
+                        history_len = new ort.Tensor(
+                            "int64",
+                            new BigInt64Array([history_len.data[0] + 1n]),
+                            [1]
+                        );
+                        // Update pos_factor manually to stay in ort.Tensor type
+                        const newPosFactorValue = int64ToFloat16(float16ToInt64(pos_factor.data[0]) + BigInt(1));
+                        pos_factor = new ort.Tensor(
+                            "float16",
+                            new Float16Array([newPosFactorValue]),
+                            [1]
+                        );
+                    }
+
+                    (input_ids.data)[0] = Number(token_id.data[0]);
+
+                    // Run Session B again
+                    const result_B = await this.sessions.B.run({
+                        input_ids: input_ids,
+                        ids_len: ids_len,
+                    });
+                    hidden_states = result_B.hidden_states;
+
+                    const decoded = this.tokenizer.decode([Number(token_id.data[0])]);
+                    outputText += decoded;
+                }
+
+                return outputText;
 
             } else if (this.modelType === 'moondream') {
                 // Moondream for VQA (uses pipeline API)

@@ -39,7 +39,7 @@ export function AIChat() {
 
     const isVisionModel = activeModel?.includes('Vision') || activeModel?.includes('Llava') ||
         activeModel?.includes('vision') || activeModel?.includes('Florence') ||
-        activeModel?.includes('moondream');
+        activeModel?.includes('moondream') || activeModel?.toLowerCase().includes('qwen2-vl');
 
     // Handle Document Selection & Image Conversion
     useEffect(() => {
