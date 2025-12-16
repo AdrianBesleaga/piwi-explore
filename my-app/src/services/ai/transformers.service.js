@@ -374,15 +374,17 @@ class TransformersService {
      * Generate a caption or answer for an image
      * @param {string|Blob|File} image - Image data (URL, Blob, or File)
      * @param {string} prompt - Optional prompt/question for the image
+     * @param {Function} onTokenCallback - Optional callback for streaming tokens (text)
      * @returns {Promise<string>}
      */
-    async generateFromImage(image, prompt = null) {
+    async generateFromImage(image = null, prompt = null, onTokenCallback = null) {
         if (!this.model) {
             throw new Error('Model not loaded. Call loadModel() first.');
         }
 
         try {
             let result;
+            const hasImage = image !== null && image !== undefined;
 
             if (this.modelType === 'florence') {
                 // Florence-2 requires using the processor and model directly
@@ -476,20 +478,28 @@ class TransformersService {
                 );
 
                 let past_value_states = past_key_states;
+                // Reference uses 0xfbff (-inf) for attention_mask
                 let attention_mask = new ort.Tensor("float16", new Float16Array([0xfbff]), [1]);
                 let pos_factor = new ort.Tensor("float16", new Float16Array([0]), [1]);
 
+                // ...
+
                 // Prepare Tokenizer Input
+                const content = [];
+                if (hasImage) {
+                    content.push({ type: "image" });
+                }
+                content.push({ type: "text", text: prompt || "Describe this image." });
+
                 const messages = [
                     {
-                        role: "user", content: [
-                            { type: "image" },
-                            { type: "text", text: prompt || "Describe this image." }
-                        ]
+                        role: "user", content: content
                     }
                 ];
 
+                // Always use Vision Template for consistency (treating text-only as "blind" vision)
                 const templatePrompt = `\n<|im_start|>user\n<|vision_start|><|vision_end|>${prompt || "Describe this image."}<|im_end|>\n<|im_start|>assistant\n`;
+
                 // Prefer simple template construction to avoid issues with specialized templates
                 const token = await this.tokenizer(templatePrompt, {
                     return_tensors: "pt",
@@ -521,9 +531,13 @@ class TransformersService {
                 ({ position_ids } = await this.sessions.C.run({
                     dummy: dummy,
                 }));
+                console.log(`[Debug] Session B hidden_states: ${hidden_states.dims}`);
+                console.log(`[Debug] Session C position_ids: ${position_ids.dims}`);
 
-                // Process Image
-                if (true) { // Always vision for now
+                // Process Image (Real)
+                let image_embed;
+
+                if (hasImage) {
                     let rawImage;
                     if (typeof image === 'string') {
                         rawImage = await RawImage.fromURL(image);
@@ -545,21 +559,22 @@ class TransformersService {
                     rawImage = rawImage.div_(255.0);
                     const pixel_values = rawImage.unsqueeze(0);
 
-                    // Re-init Session A if needed (we released it? no we keep it in service)
-                    // But example released it. To save memory, maybe we should release.
-                    // For now, let's keep A loaded or re-load.
+                    // Session A should already be loaded during loadModel
                     if (!this.sessions.A) {
-                        this.sessions.A = await ort.InferenceSession.create(
-                            await getModelFile(this.modelId, `onnx/QwenVL_A_${QUANT}.onnx`),
-                            { executionProviders: ["webgpu"] } // Simplified options
-                        );
+                        throw new Error("Session A (Vision Encoder) not loaded.");
                     }
 
                     console.log("[TransformersService] Run Session A");
-                    const { image_embed } = await this.sessions.A.run({
+                    const resA = await this.sessions.A.run({
                         pixel_values: pixel_values,
                     });
+                    image_embed = resA.image_embed;
 
+                    // Release Session A after use to free memory
+                    await this.sessions.A.release();
+                    this.sessions.A = null;
+
+                    // Prepare inputs for Session D (Merger)
                     // Update ids_len manually since ort.Tensor doesn't have .add()
                     ids_len = new ort.Tensor(
                         "int64",
@@ -579,10 +594,6 @@ class TransformersService {
                         [1]
                     );
 
-                    // Release A to save memory
-                    await this.sessions.A.release();
-                    this.sessions.A = null;
-
                     // Load Session D if needed
                     if (!this.sessions.D) {
                         console.log("[TransformersService] Loading Session D...");
@@ -590,6 +601,7 @@ class TransformersService {
                             await getModelFile(this.modelId, `onnx/QwenVL_D_${QUANT}.onnx`),
                             { executionProviders: ["webgpu"] }
                         );
+                        console.log('[TransformersService] Session D loaded. Provider:', this.sessions.D.handler.backendName || 'unknown');
                     }
 
                     console.log("[TransformersService] Run Session D");
@@ -605,6 +617,8 @@ class TransformersService {
                     await this.sessions.D.release();
                     this.sessions.D = null;
                 }
+                // End of Vision/Text Pre-processing
+
 
                 // Generation Loop
                 let outputText = '';
@@ -620,14 +634,16 @@ class TransformersService {
                         this.sessions.E = await ort.InferenceSession.create(
                             await getModelFile(this.modelId, `onnx/QwenVL_E_${QUANT}.onnx`),
                             {
-                                executionProviders: ["wasm"], // WASM for E as per example (often faster for small ops or less memory overhead?)
+                                executionProviders: ["wasm"], // Keep WASM for Decode (Session E) for stability
                                 executionMode: "sequential",
                                 intraOpNumThreads: 0
                             }
                         );
+                        console.log('[TransformersService] Session E loaded. Provider:', this.sessions.E.handler.backendName || 'unknown');
                     }
 
-                    console.log("[TransformersService] Run Session E (Decode)"); // Verbose for debugging
+                    console.log("[TransformersService] Run Session E (Decode)");
+                    console.log(`[Debug] E Inputs: hidden_states=${hidden_states.dims}, position_ids=${position_ids.dims}, ids_len=${ids_len.data}, pos_factor=${pos_factor.data}`);
                     ({
                         max_logit_ids: token_id,
                         past_key_states: past_key_states,
@@ -662,9 +678,12 @@ class TransformersService {
                         attention_mask = new ort.Tensor("float16", new Float16Array([0]), [1]);
 
                         // Vision logic assumption (we always do vision here)
+                        // If hasImage, use pos_factor_v + ids_len, else use normal linear
+                        const current_pos = hasImage ? (pos_factor_v + ids_len.data[0]) : BigInt(ids_len.data[0]);
+
                         pos_factor = new ort.Tensor(
                             "float16",
-                            new Float16Array([int64ToFloat16(pos_factor_v + ids_len.data[0])]),
+                            new Float16Array([int64ToFloat16(current_pos)]),
                             [1]
                         );
                     } else {
@@ -694,6 +713,10 @@ class TransformersService {
 
                     const decoded = this.tokenizer.decode([Number(token_id.data[0])]);
                     outputText += decoded;
+
+                    if (onTokenCallback) {
+                        onTokenCallback(outputText);
+                    }
                 }
 
                 return outputText;
@@ -826,13 +849,13 @@ class TransformersService {
         }
 
         if (!imageData) {
-            console.error('[TransformersService] No image data found in message!');
-            throw new Error('Vision models require an image. No image found in message.');
+            console.log('[TransformersService] No image data found. Proceeding with text-only chat.');
+            // Allow text-only for Qwen2-VL (and others if supported)
         }
 
         console.log('[TransformersService] Generating response for text:', userText);
         // Generate response
-        const response = await this.generateFromImage(imageData, userText);
+        const response = await this.generateFromImage(imageData, userText, onUpdate);
         console.log('[TransformersService] Response generated:', response?.substring(0, 100));
 
         // Call onUpdate callback for API compatibility (not streaming, just final result)

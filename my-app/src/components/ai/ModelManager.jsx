@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,19 @@ import { Download, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 export function ModelManager() {
     const dispatch = useDispatch();
     const { availableModels, activeModel, modelStatus, downloadProgress, error } = useSelector(state => state.ai);
+    const hasAutoLoaded = useRef(false);
+
+    useEffect(() => {
+        // Auto-load the first model if none is active and we haven't tried yet
+        if (!activeModel && modelStatus === 'idle' && availableModels.length > 0 && !hasAutoLoaded.current) {
+            console.log('[ModelManager] Auto-loading default model:', availableModels[0].name);
+            hasAutoLoaded.current = true;
+            dispatch(loadModel({
+                modelId: availableModels[0].id,
+                provider: availableModels[0].provider
+            }));
+        }
+    }, [activeModel, modelStatus, availableModels, dispatch]);
 
     const handleLoad = (model) => {
         console.log('[ModelManager] handleLoad called with:', model);

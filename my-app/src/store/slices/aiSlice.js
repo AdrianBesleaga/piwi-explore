@@ -74,6 +74,14 @@ const aiSlice = createSlice({
         error: null,
         availableModels: [
             // === VISION MODELS (Step 1: Extract Text from Images) ===
+            {
+                id: "pdufour/Qwen2-VL-2B-Instruct-ONNX-Q4-F16",
+                name: "Qwen2-VL 2B 🚀",
+                size: "~1.5GB",
+                provider: "transformers",
+                capabilities: "Fast Vision-Language",
+                description: "Optimized local loading via cache. Offline capable."
+            },
             // All models support Italian language OCR - WORKING & TESTED
 
             // BEST AVAILABLE - Proven to work in browser
@@ -210,14 +218,6 @@ const aiSlice = createSlice({
                 capabilities: "Vision-Language, Video Understanding",
                 experimental: true,
                 description: "⚠️ Requires 8GB+ RAM. May crash browser. Powerful vision understanding."
-            },
-            {
-                id: "pdufour/Qwen2-VL-2B-Instruct-ONNX-Q4-F16",
-                name: "Qwen2-VL 2B (Local Cache) 🚀",
-                size: "~1.5GB",
-                provider: "transformers",
-                capabilities: "Fast Vision-Language (Cached)",
-                description: "Optimized local loading via cache. Offline capable."
             }
         ]
     },
