@@ -227,6 +227,32 @@ class TransformersService {
                 console.log('[TransformersService] Loading AutoProcessor...');
                 this.processor = await AutoProcessor.from_pretrained(modelId);
                 console.log('[TransformersService] Processor loaded:', !!this.processor);
+            } else if (modelIdLower.includes('fastvlm')) {
+                // FastVLM-0.5B-ONNX
+                this.modelType = 'fastvlm';
+                console.log('[TransformersService] Loading FastVLM model via pipeline...');
+
+                this.model = await pipeline('image-to-text', modelId, {
+                    dtype: 'q4f16',
+                    device: 'webgpu',
+                    progress_callback: onProgress
+                });
+
+                console.log('[TransformersService] FastVLM pipeline loaded successfully.');
+
+            } else if (modelIdLower.includes('gemma')) {
+                // Gemma 3n (Multimodal)
+                this.modelType = 'gemma';
+                console.log('[TransformersService] Loading Gemma model via pipeline...');
+
+                this.model = await pipeline('image-to-text', modelId, {
+                    dtype: 'q4f16',
+                    device: 'webgpu',
+                    progress_callback: onProgress
+                });
+
+                console.log('[TransformersService] Gemma pipeline loaded successfully.');
+
             } else if (modelIdLower.includes('qwen2-vl') || modelIdLower.includes('qwen2.5-vl')) {
                 // Qwen2-VL - Manual ONNX loading as per fix
                 this.modelType = 'qwen2-vl';
@@ -447,12 +473,79 @@ class TransformersService {
                 result = postProcessed[task];
                 return result || JSON.stringify(postProcessed);
 
+                return result || JSON.stringify(postProcessed);
+
+            } else if (this.modelType === 'fastvlm') {
+                // FastVLM Pipeline Generation
+                console.log('[TransformersService] Generating with FastVLM pipeline...');
+
+                // Construct prompt
+                // FastVLM likely expects standard prompt or chat format supported by pipeline
+                const messages = [
+                    { role: 'user', content: [] }
+                ];
+
+                if (image) {
+                    messages[0].content.push({ type: 'image', image: image });
+                }
+                messages[0].content.push({ type: 'text', text: prompt || "Describe this image." });
+
+                // Call pipeline
+                const result = await this.model(messages, {
+                    max_new_tokens: 200,
+                    streamer: onTokenCallback ? {
+                        callback_function: (chunk) => {
+                            // Extract text from chunk if it's not already string
+                            const text = typeof chunk === 'string' ? chunk : (chunk[0]?.generated_text || '');
+                            onTokenCallback(text);
+                        }
+                    } : undefined
+                });
+
+                // Pipeline returns array of results
+                console.log('[TransformersService] FastVLM Result:', result);
+                return result[0]?.generated_text || JSON.stringify(result);
+
+            } else if (this.modelType === 'gemma') {
+                // Gemma Pipeline Generation
+                console.log('[TransformersService] Generating with Gemma pipeline...');
+
+                const messages = [
+                    { role: 'user', content: [] }
+                ];
+
+                if (image) {
+                    messages[0].content.push({ type: 'image', image: image });
+                }
+                messages[0].content.push({ type: 'text', text: prompt || "Describe this image." });
+
+                const result = await this.model(messages, {
+                    max_new_tokens: 200,
+                    streamer: onTokenCallback ? {
+                        callback_function: (chunk) => {
+                            const text = typeof chunk === 'string' ? chunk : (chunk[0]?.generated_text || '');
+                            onTokenCallback(text);
+                        }
+                    } : undefined
+                });
+
+                console.log('[TransformersService] Gemma Result:', result);
+                return result[0]?.generated_text || JSON.stringify(result);
+
             } else if (this.modelType === 'qwen2-vl') {
                 // Qwen2-VL Manual Generation Re-implementation
                 console.log('[TransformersService] Starting Qwen2-VL manual generation...');
 
                 const { INPUT_IMAGE_SIZE, HEIGHT_FACTOR, WIDTH_FACTOR, GET_IMAGE_EMBED_SIZE, MAX_SEQ_LENGTH, MAX_SINGLE_CHAT_LENGTH, QUANT } = QWEN_CONSTANTS;
                 const IMAGE_EMBED_SIZE = GET_IMAGE_EMBED_SIZE();
+
+                const SYSTEM_PROMPT = `You are a specialized AI specifically designed for document data extraction and image-to-text conversion.
+    
+CRITICAL OUTPUT RULES:
+1. Output MUST be valid JSON only.
+2. Do NOT include markdown blocks (no \`\`\`json).
+3. Do NOT include explanations or conversational text.
+4. Extract content precisely as it appears in the image.`;
 
                 // Initialize Tensors
                 const prompt_head_len = new ort.Tensor("int64", new BigInt64Array([5n]), [1]);
@@ -497,8 +590,14 @@ class TransformersService {
                     }
                 ];
 
-                // Always use Vision Template for consistency (treating text-only as "blind" vision)
-                const templatePrompt = `\n<|im_start|>user\n<|vision_start|><|vision_end|>${prompt || "Describe this image."}<|im_end|>\n<|im_start|>assistant\n`;
+                // Conditional Template: Only use vision tags if an image is actually present.
+                // For text-only, using vision tags without running Session D (Vision Merger) confuses the model.
+                let templatePrompt;
+                if (hasImage) {
+                    templatePrompt = `\n<|im_start|>system\n${SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\n<|vision_start|><|vision_end|>${prompt || "Describe this image."}<|im_end|>\n<|im_start|>assistant\n`;
+                } else {
+                    templatePrompt = `\n<|im_start|>system\n${SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\n${prompt}<|im_end|>\n<|im_start|>assistant\n`;
+                }
 
                 // Prefer simple template construction to avoid issues with specialized templates
                 const token = await this.tokenizer(templatePrompt, {

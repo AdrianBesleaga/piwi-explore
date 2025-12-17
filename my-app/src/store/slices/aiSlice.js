@@ -82,6 +82,23 @@ const aiSlice = createSlice({
                 capabilities: "Fast Vision-Language",
                 description: "Optimized local loading via cache. Offline capable."
             },
+            {
+                id: "onnx-community/FastVLM-0.5B-ONNX",
+                name: "FastVLM 0.5B (ONNX) ⚡",
+                size: "~600MB",
+                provider: "transformers",
+                capabilities: "Fast Vision-Language",
+                description: "Ultra-fast, efficient vision model. Ideal for quick image analysis."
+            },
+            {
+                id: "onnx-community/gemma-3n-E2B-it-ONNX",
+                name: "Gemma 3n E2B (ONNX) 💎",
+                size: "~2GB",
+                provider: "transformers",
+                capabilities: "Multimodal (Text/Image/Audio/Video)",
+                description: "Google's lightweight multimodal model. Experimental WebGPU support."
+            },
+            // All models support Italian language OCR - WORKING & TESTED
             // All models support Italian language OCR - WORKING & TESTED
 
             // BEST AVAILABLE - Proven to work in browser

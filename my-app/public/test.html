@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>AI Vision | Offline</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --success-color: #10b981;
+            --border-radius: 16px;
+            --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            padding: 1rem;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            margin-top: 1rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 0.5rem;
+        }
+
+        h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        p.subtitle {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            padding: 1.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+        }
+
+        /* File Input Styling */
+        .file-upload-wrapper {
+            position: relative;
+            width: 100%;
+        }
+
+        .file-upload-label {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 1rem;
+            border: 2px dashed #475569;
+            border-radius: var(--border-radius);
+            background: rgba(255, 255, 255, 0.02);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .file-upload-label:hover,
+        .file-upload-label.active {
+            border-color: var(--accent-color);
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        .file-upload-label svg {
+            width: 48px;
+            height: 48px;
+            color: var(--text-secondary);
+            margin-bottom: 0.75rem;
+        }
+
+        .file-upload-label span {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .file-upload-input {
+            position: absolute;
+            width: 0.1px;
+            height: 0.1px;
+            opacity: 0;
+            overflow: hidden;
+            z-index: -1;
+        }
+
+        /* Image Preview */
+        .image-preview {
+            width: 100%;
+            height: 200px;
+            border-radius: var(--border-radius);
+            object-fit: cover;
+            display: none;
+            /* Hidden by default */
+            margin-bottom: 0.5rem;
+            border: 1px solid #475569;
+        }
+
+        /* Button Styling */
+        .btn {
+            width: 100%;
+            padding: 1rem;
+            border: none;
+            border-radius: 12px;
+            background: var(--accent-color);
+            color: white;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .btn:disabled {
+            background: #475569;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        .btn:not(:disabled):hover {
+            background: var(--accent-hover);
+            transform: translateY(-1px);
+        }
+
+        .btn:not(:disabled):active {
+            transform: translateY(0);
+        }
+
+        /* Output Area */
+        .output-container {
+            margin-top: 1.5rem;
+            background: #111827;
+            border-radius: var(--border-radius);
+            padding: 1.25rem;
+            font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            color: var(--success-color);
+            white-space: pre-wrap;
+            min-height: 120px;
+            border: 1px solid #374151;
+            overflow-x: auto;
+        }
+
+        .output-label {
+            display: block;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+        }
+
+        /* Progress Bars */
+        .progress-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+        .progress-item {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.8rem;
+            position: relative;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .progress-bar-fill {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            background: rgba(59, 130, 246, 0.2);
+            width: 0%;
+            transition: width 0.1s linear;
+            z-index: 0;
+        }
+
+        .progress-text {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* Spinner */
+        .spinner {
+            width: 18px;
+            height: 18px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            display: none;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Mobile Optimization */
+        @media (max-width: 480px) {
+            body {
+                padding: 0.75rem;
+            }
+
+            .card {
+                padding: 1rem;
+            }
+
+            h1 {
+                font-size: 1.5rem;
+            }
+
+            .btn {
+                padding: 0.875rem;
+                /* Larger touch target */
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>AI Vision Agent</h1>
+            <p class="subtitle">On-device image analysis</p>
+        </header>
+
+        <div class="card">
+            <div class="file-upload-wrapper">
+                <input type="file" id="file-input" class="file-upload-input" accept="image/*" />
+                <label for="file-input" class="file-upload-label" id="drop-zone">
+                    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    <span id="file-label-text">Tap to select an image</span>
+                </label>
+                <img id="image-preview" class="image-preview" alt="Selected image" />
+            </div>
+
+            <button id="run-btn" class="btn" disabled>
+                <div class="spinner" id="btn-spinner"></div>
+                <span id="btn-text">Generate Analysis</span>
+            </button>
+
+            <div id="progress-container" class="progress-list"></div>
+        </div>
+
+        <div class="output-container">
+            <span class="output-label">AI Output</span>
+            <div id="output">Initialize model to start...</div>
+        </div>
+    </div>
+
+    <script type="module">
+        import {
+            AutoProcessor,
+            AutoModelForImageTextToText,
+            load_image,
+            TextStreamer
+        } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers";
+
+        const outputEl = document.getElementById("output");
+        const fileInput = document.getElementById("file-input");
+        const fileLabelText = document.getElementById("file-label-text");
+        const imagePreview = document.getElementById("image-preview");
+        const dropZone = document.getElementById("drop-zone");
+        const runBtn = document.getElementById("run-btn");
+        const btnText = document.getElementById("btn-text");
+        const btnSpinner = document.getElementById("btn-spinner");
+        const progressContainer = document.getElementById("progress-container");
+
+        let processor, model;
+        const model_id = "mistralai/Ministral-3-3B-Instruct-2512-ONNX";
+
+        // File Selection Logic
+        fileInput.addEventListener('change', handleFileSelect);
+
+        function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const blobUrl = URL.createObjectURL(file);
+                imagePreview.src = blobUrl;
+                imagePreview.style.display = 'block';
+                dropZone.style.display = 'none'; // Hide drop zone
+
+                // Enable button if model is loaded
+                if (model) runBtn.disabled = false;
+            }
+        }
+
+        // Progress Callback
+        function progressCallback(init) {
+            const elId = `progress-${init.file.replace(/[^a-zA-Z0-9]/g, '-')}`;
+            let el = document.getElementById(elId);
+
+            if (!el) {
+                el = document.createElement("div");
+                el.id = elId;
+                el.className = "progress-item";
+                el.innerHTML = `
+                    <div class="progress-bar-fill"></div>
+                    <div class="progress-text">
+                        <span>${init.file}</span>
+                        <span class="pct">0%</span>
+                    </div>
+                `;
+                progressContainer.appendChild(el);
+            }
+
+            if (init.status === "progress") {
+                const bar = el.querySelector(".progress-bar-fill");
+                const pct = el.querySelector(".pct");
+                bar.style.width = `${init.progress}%`;
+                pct.textContent = `${Math.round(init.progress)}%`;
+            } else if (init.status === "done") {
+                // Remove from view slowly
+                setTimeout(() => {
+                    el.style.opacity = '0';
+                    setTimeout(() => el.remove(), 500);
+                }, 1000);
+            }
+        }
+
+        // Initialize Model
+        (async () => {
+            try {
+                outputEl.textContent = "Loading processor...";
+                processor = await AutoProcessor.from_pretrained(model_id, {
+                    progress_callback: progressCallback,
+                });
+
+                outputEl.textContent = "Loading model components...";
+                model = await AutoModelForImageTextToText.from_pretrained(
+                    model_id,
+                    {
+                        device: "webgpu",
+                        progress_callback: progressCallback,
+                    }
+                );
+
+                outputEl.textContent = "Ready. Select an image above.";
+                outputEl.style.color = "#94a3b8"; // Reset color
+
+                // Enable button only if file is already selected
+                if (fileInput.files.length > 0) {
+                    runBtn.disabled = false;
+                }
+            } catch (e) {
+                outputEl.textContent = "Error loading model: " + e.message;
+                outputEl.style.color = "#ef4444";
+                console.error(e);
+            }
+        })();
+
+        // Run Logic
+        runBtn.addEventListener("click", async () => {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            try {
+                setLoading(true);
+                outputEl.textContent = ""; // Clear previous output
+                outputEl.style.color = "var(--success-color)";
+
+                const blobUrl = URL.createObjectURL(file);
+                const image = await load_image(blobUrl);
+
+                const messages = [
+                    {
+                        role: "user",
+                        content: [
+                            { type: "image" },
+                            {
+                                type: "text",
+                                text: "Extract image information into json format.",
+                            },
+                        ],
+                    },
+                ];
+
+                const prompt = processor.apply_chat_template(messages);
+
+                const inputs = await processor(image, prompt, {
+                    add_special_tokens: false,
+                });
+
+                const streamer = new TextStreamer(processor.tokenizer, {
+                    skip_prompt: true,
+                    callback_function: (text) => {
+                        outputEl.textContent += text;
+                        // Auto scroll to bottom
+                        outputEl.parentElement.scrollTop = outputEl.parentElement.scrollHeight;
+                    },
+                });
+
+                const outputs = await model.generate({
+                    ...inputs,
+                    max_new_tokens: 2048,
+                    streamer,
+                });
+
+                const decoded = processor.batch_decode(
+                    outputs.slice(null, [inputs.input_ids.dims.at(-1), null]),
+                    { skip_special_tokens: true }
+                );
+
+                console.log("Full generation:", decoded[0]);
+
+            } catch (e) {
+                outputEl.textContent += "\nError: " + e.message;
+                outputEl.style.color = "#ef4444";
+            } finally {
+                setLoading(false);
+            }
+        });
+
+        function setLoading(isLoading) {
+            runBtn.disabled = isLoading;
+            if (isLoading) {
+                btnText.textContent = "Analyzing...";
+                btnSpinner.style.display = "block";
+            } else {
+                btnText.textContent = "Generate Analysis";
+                btnSpinner.style.display = "none";
+            }
+        }
+    </script>
+</body>
+
+</html>
